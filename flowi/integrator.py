@@ -26,6 +26,7 @@ from jax.scipy.ndimage import map_coordinates
 from tqdm.auto import tqdm
 
 from .utils import fprint
+from .clustering import find_attractors_from_convergence
 
 
 def _get_velocity(positions, v_field, map_coords_kwargs, box_size):
@@ -55,7 +56,8 @@ def _rk2_step(positions_carry, _, v_field, ds, map_coords_kwargs, epsilon,
     speeds1 = jnp.sqrt(jnp.sum(v1**2, axis=-1, keepdims=True))
     # dt_vector1: This is a "time-like" quantity. If ds is in Mpc/h and speeds
     # are in km/s, then dt_vector1 has units of (Mpc/h) / (km/s).
-    # This implicitly includes the conversion factor between Mpc and km, and h and s.
+    # This implicitly includes the conversion factor between Mpc and km, and
+    # h and s.
     dt_vector1 = ds / (speeds1 + epsilon)
     # v1 * 0.5 * dt_vector1: (km/s) * (Mpc/h)/(km/s) = Mpc/h.
     # This ensures dimensional consistency with positions_carry (Mpc/h).
@@ -191,7 +193,7 @@ class Integrator:
         fprint("Compiling and running JIT-compiled integration...")
 
         if chunk_size is None:
-            chunk_size = max(1, self.num_steps // 10)
+            chunk_size = max(1, self.num_steps // 100)
 
         map_kwargs_tuple = tuple(self.map_coords_kwargs.items())
 
@@ -238,11 +240,11 @@ class Integrator:
         half_resolution_element = (self.box_size / resolution) / 2.0
 
         # Check for convergence
-        converged_particles = (
+        converged_particles_mask = (
             self.displacement_over_n_steps < half_resolution_element
         )
-        fraction_converged = jnp.sum(converged_particles) / len(
-            converged_particles
+        fraction_converged = jnp.sum(converged_particles_mask) / len(
+            converged_particles_mask
         )
         fprint(
             f"Fraction of particles with displacement over "
@@ -252,3 +254,43 @@ class Integrator:
         )
 
         return positions, final_speeds, self.displacement_over_n_steps
+
+    def get_cluster_info(self, positions, displacement_over_n_steps,
+                         dbscan_eps=None, dbscan_min_samples=None):
+        """
+        Performs DBSCAN clustering on converged particles and returns cluster
+        information (centroids and counts).
+
+        Parameters
+        ----------
+        positions : jax.Array
+            The final positions of all particles.
+        displacement_over_n_steps : jax.Array
+            The displacement of each particle over the last n_steps_check
+            steps.
+        dbscan_eps : float, optional
+            The maximum distance between two samples for one to be considered
+            as in the neighborhood of the other for DBSCAN clustering. If None,
+            defaults to half a resolution element.
+        dbscan_min_samples : int, optional
+            The number of samples (or total weight) in a neighborhood for a
+            point to be considered as a core point for DBSCAN clustering. If
+            None, defaults to 2.
+
+        Returns
+        -------
+        AttractorCollection
+            An `AttractorCollection` object containing `AttractorInfo` objects,
+            each with 'centroid' (mean position) and 'count' (number of
+            particles) for each found attractor. Returns an empty collection if
+            no attractors are found.
+        
+        """
+        return find_attractors_from_convergence(
+            positions,
+            displacement_over_n_steps,
+            self.box_size,
+            self.v_field.shape,
+            dbscan_eps,
+            dbscan_min_samples,
+        )
