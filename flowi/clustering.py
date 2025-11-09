@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from .utils import fprint
 
 # Import astropy for coordinate transformations
-from astropy.coordinates import SkyCoord, CartesianRepresentation
+from astropy.coordinates import SkyCoord, Galactic, CartesianRepresentation
 import astropy.units as u
 
 
@@ -110,7 +110,7 @@ class AttractorCollection:
         """
         return jnp.array([a.centroid for a in self._attractors])
 
-    def to_galactic(self, observer_location,  input_frame):
+    def to_galactic(self, observer_location, input_frame):
         """
         Converts the centroids of all attractors in the collection to Galactic
         coordinates.
@@ -236,4 +236,3 @@ def find_attractors_from_convergence(
     attractor_info_list.sort(key=lambda x: x.count, reverse=True)
 
     return AttractorCollection(attractor_info_list)
-
