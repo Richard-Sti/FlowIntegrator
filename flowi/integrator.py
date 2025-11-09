@@ -27,11 +27,15 @@ from jax.scipy.ndimage import map_coordinates
 from .utils import fprint
 
 
-def _get_velocity(positions, v_field, map_coords_kwargs):
+def _get_velocity(positions, v_field, map_coords_kwargs, box_size):
     """
     Get velocities at particle positions using interpolation.
+    Converts physical coordinates to pixel coordinates for map_coordinates.
     """
-    coords = positions.T
+    resolution = v_field.shape[0]
+    # Convert physical coordinates to pixel-center-based coordinates
+    pixel_coords = (positions / box_size) * resolution - 0.5
+    coords = pixel_coords.T
     kwargs = dict(map_coords_kwargs)
     vx = map_coordinates(v_field[..., 0], coords, **kwargs)
     vy = map_coordinates(v_field[..., 1], coords, **kwargs)
@@ -39,35 +43,45 @@ def _get_velocity(positions, v_field, map_coords_kwargs):
     return jnp.stack([vx, vy, vz], axis=-1)
 
 
-def _rk2_step(positions_carry, _, v_field, ds, map_coords_kwargs, epsilon):
+def _rk2_step(positions_carry, _, v_field, ds, map_coords_kwargs, epsilon,
+              box_size):
     """
-    Performs one RK2 step using an adaptive spatial step.
+    Performs one RK2 step using an adaptive spatial step. Applies periodic
+    boundary conditions.
     """
     # --- RK2 Step 1 (k1) ---
-    v1 = _get_velocity(positions_carry, v_field, map_coords_kwargs)
+    v1 = _get_velocity(positions_carry, v_field, map_coords_kwargs, box_size)
     speeds1 = jnp.sqrt(jnp.sum(v1**2, axis=-1, keepdims=True))
     dt_vector1 = ds / (speeds1 + epsilon)
     p_mid = positions_carry + v1 * 0.5 * dt_vector1
+    p_mid = jnp.mod(p_mid, box_size)
 
     # --- RK2 Step 2 (k2) ---
-    v2 = _get_velocity(p_mid, v_field, map_coords_kwargs)
+    v2 = _get_velocity(p_mid, v_field, map_coords_kwargs, box_size)
     speeds2 = jnp.sqrt(jnp.sum(v2**2, axis=-1, keepdims=True))
     dt_vector2 = ds / (speeds2 + epsilon)
 
     # --- Final Update ---
     final_positions = positions_carry + v2 * dt_vector2
+
+    # Apply periodic boundary conditions
+    final_positions = jnp.mod(final_positions, box_size)
+
     return final_positions, None
 
 
 class Integrator:
     """
     Handles the evolution of test particles in a 3D velocity field.
+    Assumes periodic boundary conditions.
 
     Parameters
     ----------
     v_field : numpy.ndarray
         The 3D velocity field as a NumPy array. It will be moved to the
         JAX device upon initialization.
+    box_size : float
+        The size of the simulation box in physical units.
     num_steps : int
         The number of integration steps.
     ds : float
@@ -80,10 +94,10 @@ class Integrator:
     **map_coords_kwargs
         Keyword arguments for `map_coordinates`.
     """
-    def __init__(self, v_field, num_steps, ds, epsilon=1e-6,
+    def __init__(self, v_field, box_size, num_steps, ds, epsilon=1e-6,
                  **map_coords_kwargs):
-        fprint("Moving velocity field to device...")
         self.v_field = jax.device_put(v_field)
+        self.box_size = box_size
         self.num_steps = num_steps
         self.ds = ds
         self.epsilon = epsilon
@@ -109,12 +123,15 @@ class Integrator:
             v_field=self.v_field,
             ds=self.ds,
             map_coords_kwargs=map_kwargs_tuple,
-            epsilon=self.epsilon
+            epsilon=self.epsilon,
+            box_size=self.box_size
         )
 
         # JIT-compile the step function, marking the kwargs as static
         jitted_step_fn = jax.jit(
-            step_fn, static_argnames=('map_coords_kwargs', 'epsilon')
+            step_fn, static_argnames=(
+                'map_coords_kwargs', 'epsilon', 'box_size'
+            )
         )
 
         dummy_scan_array = jnp.zeros(self.num_steps)
