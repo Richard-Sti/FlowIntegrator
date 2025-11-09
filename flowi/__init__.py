@@ -18,6 +18,6 @@ __version__ = "0.1.0"
 
 from .integrator import Integrator                                              # noqa
 from .utils import (                                                            # noqa
-    fprint, load_and_prepare_velocity_field,                                    # noqa
+    fprint,                                                                     # noqa
     create_initial_positions,                                                   # noqa
     )                                                                           # noqa
