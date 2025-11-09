@@ -65,8 +65,9 @@ class Integrator:
 
     Parameters
     ----------
-    v_field : jax.Array
-        The 3D velocity field.
+    v_field : numpy.ndarray
+        The 3D velocity field as a NumPy array. It will be moved to the
+        JAX device upon initialization.
     num_steps : int
         The number of integration steps.
     ds : float
@@ -81,7 +82,8 @@ class Integrator:
     """
     def __init__(self, v_field, num_steps, ds, epsilon=1e-6,
                  **map_coords_kwargs):
-        self.v_field = v_field
+        fprint("Moving velocity field to device...")
+        self.v_field = jax.device_put(v_field)
         self.num_steps = num_steps
         self.ds = ds
         self.epsilon = epsilon
