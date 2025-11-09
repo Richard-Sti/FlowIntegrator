@@ -1,0 +1,7 @@
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+
+flowi.egg-info
+venv_flowi
+*/__pycache__/
