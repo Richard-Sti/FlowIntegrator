@@ -40,32 +40,40 @@ def fprint(*args, verbose=True, **kwargs):
         print(f"{timestamp}", *args, **kwargs)
 
 
-def create_initial_positions(box_size, resolution):
+def create_initial_positions(box_size, resolution, N=None):
     """
-    Create initial particle positions on a grid, placing one particle
-    at the center of each cell.
+    Create initial particle positions on a grid.
+
+    By default, it places one particle at the center of each cell of
+    the velocity field grid (`resolution`). If `N` is specified, it
+    creates a grid of `N`^3 uniformly spaced particles.
 
     Parameters
     ----------
     box_size : float
         The size of the simulation box (e.g., 256.0).
     resolution : int
-        The number of cells along each dimension (e.g., 256).
+        The resolution of the velocity field grid.
+    N : int, optional
+        The resolution of the particle grid. If None, it defaults to
+        `resolution`. Default: None.
 
     Returns
     -------
     jax.Array
         An array of initial particle positions on the JAX device.
     """
-    cell_size = box_size / resolution
+    if N is None:
+        N = resolution
+
+    cell_size = box_size / N
     # Create coordinates for the center of each cell
-    coords = jnp.linspace(
-        cell_size / 2, box_size - cell_size / 2, resolution
-    )
+    coords = jnp.linspace(cell_size / 2, box_size - cell_size / 2, N)
     x, y, z = jnp.meshgrid(coords, coords, coords, indexing='ij')
 
     initial_positions = jnp.stack(
         [x.ravel(), y.ravel(), z.ravel()], axis=-1
     ).astype(jnp.float32)
+
     fprint(f"Initialized {initial_positions.shape[0]} particles on device.")
     return initial_positions
