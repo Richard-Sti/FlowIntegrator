@@ -52,25 +52,82 @@ def plot_trajectory_galactic(xf_gal, t):
 
     # Mask finite values
     mask = np.isfinite(r) & np.isfinite(ell) & np.isfinite(b) & np.isfinite(t)
-    r, ell, b, tc = r[mask], ell[mask], b[mask], t[mask]
+    r, ell, b = r[mask], ell[mask], b[mask]
 
     fig, axes = plt.subplots(1, 2, figsize=(8, 3), sharex=False)
 
     # Shared color normalisation
-    axes[0].scatter(r, ell, c=tc, s=10, alpha=0.8, cmap="viridis")
+    axes[0].plot(r, ell)
     axes[0].set_xlabel(r"$r$")
     axes[0].set_ylabel(r"$\ell\ [^\circ]$")
-    axes[0].set_title(r"Longitude vs Radius")
 
-    axes[1].scatter(r, b, c=tc, s=10, alpha=0.8, cmap="viridis")
+    axes[1].plot(r, b)
     axes[1].set_xlabel(r"$r$")
     axes[1].set_ylabel(r"$b\ [^\circ]$")
-    axes[1].set_title(r"Latitude vs Radius")
 
-    # Add a single shared colorbar
-    cbar = fig.colorbar(axes[1].collections[0], ax=axes.ravel().tolist(),
-                        shrink=0.85, pad=0.03)
-    cbar.set_label("Time")
+    fig.tight_layout()
+    plt.close()
+
+    return fig, axes
+
+
+def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
+                                        observer_location, input_frame):
+    """
+    Visualizes multiple trajectories with different smoothing scales in
+    Galactic coordinates.
+
+    Parameters
+    ----------
+    trajectories : list of tuple
+        A list of trajectory results from `follow_multiple_smoothing`.
+    sigmas : list of float
+        The list of smoothing scales corresponding to the trajectories.
+    intg : TrajectoryFollower
+        The TrajectoryFollower instance used to generate the trajectories.
+    observer_location : numpy.ndarray
+        The 3D position of the observer.
+    input_frame : str
+        The Astropy frame of the input Cartesian coordinates.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The matplotlib Figure object containing the plot.
+    """
+    n_sigmas = len(sigmas)
+    fig, axes = plt.subplots(n_sigmas, 2, figsize=(8, 3 * n_sigmas),
+                             sharex=True, sharey='col')
+
+    if n_sigmas == 1:
+        axes = np.array([axes])  # Make it 2D for consistent indexing
+
+    for i, (t, xf, vmag) in enumerate(trajectories):
+        xf_gal = intg.to_galactic(xf, observer_location, input_frame)
+
+        r = xf_gal[:, 0]
+        ell = xf_gal[:, 1]
+        b = xf_gal[:, 2]
+
+        axes[i, 0].plot(r, ell)
+        axes[i, 1].plot(r, b)
+
+    for i in range(n_sigmas):
+        axes[i, 0].set_ylabel(r"$\ell\ [^\circ]$")
+        axes[i, 1].set_ylabel(r"$b\ [^\circ]$")
+
+        secax = axes[i, 1].secondary_yaxis('right')
+        if sigmas[i] == 0:
+            sigma_label = "No smoothing"
+        else:
+            sigma_label = (f"$\sigma = {sigmas[i]}"
+                           r"\ [h^{-1}\ \mathrm{Mpc}]$")
+        secax.set_ylabel(sigma_label)
+        secax.set_ticks([])
+
+        if i == n_sigmas - 1:  # Only for the last row
+            axes[i, 0].set_xlabel(r"$r\ [h^{-1}\ \mathrm{Mpc}]$")
+            axes[i, 1].set_xlabel(r"$r\ [h^{-1}\ \mathrm{Mpc}]$")
 
     fig.tight_layout()
     plt.close()
