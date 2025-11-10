@@ -72,7 +72,8 @@ def plot_trajectory_galactic(xf_gal, t):
 
 
 def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
-                                        observer_location, input_frame):
+                                        observer_location, input_frame,
+                                        panel_height=3):
     """
     Visualizes multiple trajectories with different smoothing scales in
     Galactic coordinates.
@@ -89,6 +90,8 @@ def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
         The 3D position of the observer.
     input_frame : str
         The Astropy frame of the input Cartesian coordinates.
+    panel_height : float, optional
+        The height of each individual panel in inches. Default is 3.
 
     Returns
     -------
@@ -96,7 +99,7 @@ def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
         The matplotlib Figure object containing the plot.
     """
     n_sigmas = len(sigmas)
-    fig, axes = plt.subplots(n_sigmas, 2, figsize=(8, 3 * n_sigmas),
+    fig, axes = plt.subplots(n_sigmas, 2, figsize=(8, panel_height * n_sigmas),
                              sharex=True, sharey='col')
 
     if n_sigmas == 1:
@@ -113,21 +116,20 @@ def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
         axes[i, 1].plot(r, b)
 
     for i in range(n_sigmas):
-        axes[i, 0].set_ylabel(r"$\ell\ [^\circ]$")
-        axes[i, 1].set_ylabel(r"$b\ [^\circ]$")
+        axes[i, 0].set_ylabel(r"$\ell ~ [^\circ]$")
+        axes[i, 1].set_ylabel(r"$b ~ [^\circ]$")
 
         secax = axes[i, 1].secondary_yaxis('right')
         if sigmas[i] == 0:
             sigma_label = "No smoothing"
         else:
-            sigma_label = (f"$\sigma = {sigmas[i]}"
-                           r"\ [h^{-1}\ \mathrm{Mpc}]$")
+            sigma_label = (fr"$\sigma = {sigmas[i]} h^{{-1}} \mathrm{{Mpc}}$")
         secax.set_ylabel(sigma_label)
         secax.set_ticks([])
 
         if i == n_sigmas - 1:  # Only for the last row
-            axes[i, 0].set_xlabel(r"$r\ [h^{-1}\ \mathrm{Mpc}]$")
-            axes[i, 1].set_xlabel(r"$r\ [h^{-1}\ \mathrm{Mpc}]$")
+            axes[i, 0].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
+            axes[i, 1].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
 
     fig.tight_layout()
     plt.close()
