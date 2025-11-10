@@ -73,7 +73,7 @@ def plot_trajectory_galactic(xf_gal, t):
 
 def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
                                         observer_location, input_frame,
-                                        panel_height=3):
+                                        panel_height=3, plot_attractors=True):
     """
     Visualizes multiple trajectories with different smoothing scales in
     Galactic coordinates.
@@ -92,6 +92,9 @@ def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
         The Astropy frame of the input Cartesian coordinates.
     panel_height : float, optional
         The height of each individual panel in inches. Default is 3.
+    plot_attractors : bool, optional
+        If True, plot the positions of Virgo, Great Attractor, and Shapley
+        superclusters. Default is True.
 
     Returns
     -------
@@ -114,6 +117,26 @@ def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
 
         axes[i, 0].plot(r, ell)
         axes[i, 1].plot(r, b)
+
+    if plot_attractors:
+        attractors = {
+            'Virgo': (12, 284, 74),
+            'Great Attractor': (49, 308, 29),
+            'Shapley': (138, 312.5, 30.3)
+        }
+        offset_y = 5  # Adjust this value as needed for proper spacing
+
+        for i, (name, (r, l, b)) in enumerate(attractors.items()):
+            for j in range(n_sigmas):
+                # Plot circle
+                axes[j, 0].plot(r, l, 'o', color='black', markersize=5)
+                axes[j, 1].plot(r, b, 'o', color='black', markersize=5)
+
+                # Add name above circle
+                axes[j, 0].text(r, l + offset_y, name, color='black',
+                                ha='center', va='bottom', fontsize=8)
+                axes[j, 1].text(r, b + offset_y, name, color='black',
+                                ha='center', va='bottom', fontsize=8)
 
     for i in range(n_sigmas):
         axes[i, 0].set_ylabel(r"$\ell ~ [^\circ]$")
