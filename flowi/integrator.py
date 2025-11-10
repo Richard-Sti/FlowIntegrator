@@ -27,6 +27,9 @@ from tqdm.auto import tqdm
 
 from .utils import fprint
 from .clustering import find_attractors_from_convergence
+from astropy.coordinates import SkyCoord, CartesianRepresentation
+import astropy.units as u
+import numpy as np
 
 
 def _get_velocity(positions, v_field, map_coords_kwargs, box_size):
@@ -77,7 +80,7 @@ def _rk2_step(positions_carry, _, v_field, ds, map_coords_kwargs, epsilon,
     # Apply periodic boundary conditions
     final_positions = jnp.mod(final_positions, box_size)
 
-    return final_positions, None
+    return final_positions, (final_positions, speeds2)
 
 
 @partial(jax.jit, static_argnames=('map_coords_kwargs', 'epsilon',
@@ -284,7 +287,6 @@ class Integrator:
             each with 'centroid' (mean position) and 'count' (number of
             particles) for each found attractor. Returns an empty collection if
             no attractors are found.
-        
         """
         return find_attractors_from_convergence(
             positions,
@@ -294,3 +296,144 @@ class Integrator:
             dbscan_eps,
             dbscan_min_samples,
         )
+
+
+class TrajectoryFollower:
+    """
+    Follows the trajectory of a single particle through the velocity field.
+    """
+    def __init__(self, v_field, box_size, num_steps, ds, epsilon=1e-6,
+                 **map_coords_kwargs):
+        if v_field.shape[0] != 3 or v_field.ndim != 4:
+            raise ValueError(
+                "Velocity field must have shape (3, res, res, res)"
+            )
+        self.v_field = jax.device_put(v_field)
+        self.box_size = box_size
+        self.num_steps = num_steps
+        self.ds = ds
+        self.epsilon = epsilon
+
+        # Pop 'adaptive' from map_coords_kwargs if it exists, as it is no
+        # longer a valid parameter.
+        if 'adaptive' in map_coords_kwargs:
+            map_coords_kwargs.pop('adaptive')
+
+        if not map_coords_kwargs:
+            self.map_coords_kwargs = {
+                'order': 1, 'mode': 'wrap', 'cval': 0.0
+            }
+        else:
+            self.map_coords_kwargs = map_coords_kwargs
+
+    def follow(self, initial_position):
+        """
+        Follows the trajectory of a single particle.
+
+        Parameters
+        ----------
+        initial_position : jax.Array
+            The starting position of the particle (shape (3,)).
+
+        Returns
+        -------
+        tuple
+            A tuple containing:
+            - jax.Array: A 1D array of shape (num_steps,) containing the
+              time steps (from 1 to num_steps).
+            - jax.Array: A 2D array of shape (num_steps, 3) containing the
+              trajectory of the particle at each time step.
+            - jax.Array: A 1D array of shape (num_steps,) containing the
+              velocity magnitude of the particle at each time step.
+        """
+        if initial_position.shape != (3,):
+            raise ValueError(
+                "initial_position must be a 1D array of shape (3,)"
+            )
+
+        # The _rk2_step function expects positions_carry to be (N, 3).
+        # For a single particle, we reshape it to (1, 3) and then back.
+        single_particle_position = initial_position[jnp.newaxis, :]
+
+        # Create a step function for lax.scan
+        step_fn = partial(
+            _rk2_step,
+            v_field=self.v_field,
+            ds=self.ds,
+            map_coords_kwargs=tuple(self.map_coords_kwargs.items()),
+            epsilon=self.epsilon,
+            box_size=self.box_size
+        )
+
+        # Use lax.scan to perform multiple RK2 steps
+        # The second return value of lax.scan accumulates the 'carry'
+        # at each step.
+        final_position_carry, (trajectory_steps, speeds_steps) = jax.lax.scan(
+            step_fn, single_particle_position, jnp.zeros(self.num_steps)
+        )
+
+        # The trajectory_steps will have shape (num_steps, 1, 3).
+        # The speeds_steps will have shape (num_steps, 1, 1).
+        # We need to squeeze the middle dimensions.
+        trajectory = trajectory_steps.squeeze()
+        speeds_trajectory = speeds_steps.squeeze()
+        time_steps = jnp.arange(1, self.num_steps + 1)
+
+        return time_steps, trajectory, speeds_trajectory
+
+    def to_galactic(self, trajectory, observer_location, input_frame):
+        """
+        Converts the trajectory steps to Galactic coordinates.
+
+        Parameters
+        ----------
+        trajectory : jax.Array
+            A 2D array of shape (num_steps, 3) containing the trajectory
+            of the particle.
+        observer_location : numpy.ndarray
+            The 3D position of the observer within the box, in the same
+            Cartesian units as the trajectory. Shape must be (3,).
+        input_frame : str
+            The Astropy frame of the input Cartesian coordinates of the
+            trajectory steps (e.g., 'icrs', 'supergalactic').
+
+        Returns
+        -------
+        jax.Array
+            A 2D JAX array of shape (num_steps, 3), where each row contains
+            the distance, Galactic longitude (l), and Galactic latitude (b)
+            for each trajectory step. Units are Mpc for distance and degrees
+            for l and b.
+        """
+        if (not isinstance(observer_location, np.ndarray) or
+                observer_location.shape != (3,)):
+            raise ValueError(
+                "observer_location must be a numpy array of shape (3,)"
+            )
+
+        galactic_coords_data = []
+        for step_position in trajectory:
+            # Convert JAX array to NumPy array for Astropy
+            step_position_np = np.array(step_position) * u.Mpc
+
+            # The vector from observer to step_position is:
+            relative_position = step_position_np - observer_location * u.Mpc
+
+            cartesian_representation = CartesianRepresentation(
+                x=relative_position[0],
+                y=relative_position[1],
+                z=relative_position[2],
+                unit=u.Mpc
+            )
+
+            # Create a SkyCoord object in the specified input_frame
+            sky_coord = SkyCoord(cartesian_representation, frame=input_frame)
+
+            # Transform to Galactic coordinates
+            galactic_coord = sky_coord.galactic
+            galactic_coords_data.append([
+                galactic_coord.distance.value,
+                galactic_coord.l.value,
+                galactic_coord.b.value
+            ])
+        return jnp.array(galactic_coords_data)
