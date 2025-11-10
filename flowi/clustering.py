@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from .utils import fprint
 
 # Import astropy for coordinate transformations
-from astropy.coordinates import SkyCoord, Galactic, CartesianRepresentation
+from astropy.coordinates import SkyCoord, CartesianRepresentation
 import astropy.units as u
 
 
@@ -33,6 +33,7 @@ class AttractorInfo:
     """
     centroid: jnp.ndarray
     count: int
+    members: jnp.ndarray
 
     def to_galactic(self, observer_location, input_frame):
         """
@@ -194,6 +195,8 @@ def find_attractors_from_convergence(
         displacement_over_n_steps < half_resolution_element
     )
     converged_final_positions = positions[converged_particles_mask]
+    # Get the original indices of the converged particles
+    converged_particle_indices = jnp.where(converged_particles_mask)[0]
 
     if converged_final_positions.shape[0] > 0:
         # Set default DBSCAN parameters if not provided
@@ -226,9 +229,12 @@ def find_attractors_from_convergence(
 
             centroid = jnp.mean(attractor_positions, axis=0)
             count = attractor_positions.shape[0]
+            # Get the indices of particles belonging to this specific attractor
+            attractor_members = converged_particle_indices[class_member_mask]
 
             attractor_info_list.append(
-                AttractorInfo(centroid=centroid, count=count))
+                AttractorInfo(centroid=centroid, count=count,
+                              members=attractor_members))
     else:
         fprint("No converged particles found for DBSCAN clustering.")
 
