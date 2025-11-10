@@ -42,7 +42,8 @@ def fprint(*args, verbose=True, **kwargs):
         print(f"{timestamp}", *args, **kwargs)
 
 
-def create_initial_positions(box_size, resolution, N=None):
+def create_initial_positions(box_size, resolution, N=None,
+                             observer_location=None, max_distance=None):
     """
     Create initial particle positions on a grid.
 
@@ -59,6 +60,14 @@ def create_initial_positions(box_size, resolution, N=None):
     N : int, optional
         The resolution of the particle grid. If None, it defaults to
         `resolution`. Default: None.
+    observer_location : jax.Array, optional
+        A 3D JAX array (shape (3,)) representing the observer's position.
+        If provided along with `max_distance`, only particles within
+        `max_distance` from this location will be returned. Default: None.
+    max_distance : float, optional
+        The maximum distance from the `observer_location` to include particles.
+        If provided along with `observer_location`, only particles within
+        this distance will be returned. Default: None.
 
     Returns
     -------
@@ -76,6 +85,18 @@ def create_initial_positions(box_size, resolution, N=None):
     initial_positions = jnp.stack(
         [x.ravel(), y.ravel(), z.ravel()], axis=-1
     ).astype(jnp.float32)
+
+    if observer_location is not None and max_distance is not None:
+        if observer_location.shape != (3,):
+            raise ValueError(
+                "observer_location must be a 1D array of shape (3,)"
+            )
+        distances = jnp.sqrt(
+            jnp.sum((initial_positions - observer_location)**2, axis=-1)
+        )
+        initial_positions = initial_positions[distances <= max_distance]
+        fprint(f"Filtered to {initial_positions.shape[0]} particles "
+               f"within {max_distance} of observer.")
 
     fprint(f"Initialized {initial_positions.shape[0]} particles on device.")
     return initial_positions
