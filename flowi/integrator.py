@@ -303,6 +303,8 @@ class TrajectoryFollower:
     Follows the trajectory of a single particle through the velocity field.
     """
     def __init__(self, v_field, box_size, num_steps, ds, epsilon=1e-6,
+                 min_steps=None, stop_on_convergence=True,
+                 convergence_check_steps=None, convergence_threshold=None,
                  **map_coords_kwargs):
         if v_field.shape[0] != 3 or v_field.ndim != 4:
             raise ValueError(
@@ -314,10 +316,28 @@ class TrajectoryFollower:
         self.ds = ds
         self.epsilon = epsilon
 
+        if min_steps is None:
+            self.min_steps = max(1, int(0.3 * num_steps))
+        else:
+            self.min_steps = min_steps
+
+        self.stop_on_convergence = stop_on_convergence
+
+        if convergence_check_steps is None:
+            self.convergence_check_steps = max(1, int(0.1 * num_steps))
+        else:
+            self.convergence_check_steps = convergence_check_steps
+
         # Pop 'adaptive' from map_coords_kwargs if it exists, as it is no
         # longer a valid parameter.
         if 'adaptive' in map_coords_kwargs:
             map_coords_kwargs.pop('adaptive')
+
+        if convergence_threshold is None:
+            resolution = self.v_field.shape[1]
+            self.convergence_threshold = (self.box_size / resolution) / 2.0
+        else:
+            self.convergence_threshold = convergence_threshold
 
         if not map_coords_kwargs:
             self.map_coords_kwargs = {
@@ -365,19 +385,66 @@ class TrajectoryFollower:
             box_size=self.box_size
         )
 
-        # Use lax.scan to perform multiple RK2 steps
-        # The second return value of lax.scan accumulates the 'carry'
-        # at each step.
-        final_position_carry, (trajectory_steps, speeds_steps) = jax.lax.scan(
-            step_fn, single_particle_position, jnp.zeros(self.num_steps)
+        if not self.stop_on_convergence:
+            # Use lax.scan to perform multiple RK2 steps if not stopping on
+            # convergence
+            _, (trajectory_steps, speeds_steps) = jax.lax.scan(
+                step_fn, single_particle_position, jnp.zeros(self.num_steps)
+            )
+            trajectory = trajectory_steps.squeeze()
+            speeds_trajectory = speeds_steps.squeeze()
+            time_steps = jnp.arange(1, self.num_steps + 1)
+            return time_steps, trajectory, speeds_trajectory
+
+        # --- Convergence stopping logic ---
+        def cond_fun(state):
+            step, _, _, _, converged, _ = state
+            return (step < self.num_steps) & ~converged
+
+        def body_fun(state):
+            step, last_pos, trajectory, speeds, _, last_checkpoint_pos = state
+            new_pos, (_, new_speed) = step_fn(last_pos, None)
+            trajectory = trajectory.at[step].set(new_pos.squeeze())
+            speeds = speeds.at[step].set(new_speed.squeeze())
+
+            # Check for convergence
+            is_check_step = ((step + 1) >= self.min_steps) & \
+                            ((step + 1) % self.convergence_check_steps == 0)
+            displacement = jnp.sqrt(
+                jnp.sum((new_pos - last_checkpoint_pos)**2)
+            )
+            converged = is_check_step & \
+                (displacement < self.convergence_threshold)
+
+            # Update checkpoint position
+            new_checkpoint_pos = jax.lax.cond(
+                is_check_step,
+                lambda _: new_pos,
+                lambda _: last_checkpoint_pos,
+                None
+            )
+            return (step + 1, new_pos, trajectory, speeds, converged,
+                    new_checkpoint_pos)
+
+        # Initialize state for the while_loop
+        initial_state = (
+            0,
+            single_particle_position,
+            jnp.zeros((self.num_steps, 3)),
+            jnp.zeros(self.num_steps),
+            jnp.array(False),
+            single_particle_position
         )
 
-        # The trajectory_steps will have shape (num_steps, 1, 3).
-        # The speeds_steps will have shape (num_steps, 1, 1).
-        # We need to squeeze the middle dimensions.
-        trajectory = trajectory_steps.squeeze()
-        speeds_trajectory = speeds_steps.squeeze()
-        time_steps = jnp.arange(1, self.num_steps + 1)
+        # Run the while_loop
+        final_step, _, trajectory, speeds_trajectory, _, _ = jax.lax.while_loop(  # noqa
+            cond_fun, body_fun, initial_state
+        )
+
+        # Trim the results to the actual number of steps
+        time_steps = jnp.arange(1, final_step + 1)
+        trajectory = trajectory[:final_step]
+        speeds_trajectory = speeds_trajectory[:final_step]
 
         return time_steps, trajectory, speeds_trajectory
 
