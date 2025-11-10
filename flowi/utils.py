@@ -20,6 +20,8 @@ preparing data.
 
 import datetime
 import jax.numpy as jnp
+import numpy as np
+import scipy.ndimage as ndi
 
 
 def fprint(*args, verbose=True, **kwargs):
@@ -77,3 +79,44 @@ def create_initial_positions(box_size, resolution, N=None):
 
     fprint(f"Initialized {initial_positions.shape[0]} particles on device.")
     return initial_positions
+
+
+def smooth_velocity_field_gaussian(v_field, box_size, sigma):
+    """
+    Smooths a 3D velocity field using a Gaussian kernel.
+
+    Applies a Gaussian filter to each component (vx, vy, vz) of the
+    velocity field independently.
+
+    Parameters
+    ----------
+    v_field : numpy.ndarray
+        The 3D velocity field as a NumPy array with shape
+        (3, resolution, resolution, resolution).
+    box_size : float
+        The size of the simulation box in physical units (Mpc / h).
+    sigma : float
+        Standard deviation for Gaussian kernel in physical units (Mpc / h).
+
+    Returns
+    -------
+    numpy.ndarray
+        The smoothed velocity field as a NumPy array.
+    """
+    # v_field is expected to be a NumPy array
+
+    # Get resolution from v_field shape
+    resolution = v_field.shape[1]
+
+    # Convert sigma from physical units (Mpc/h) to grid units (pixels)
+    sigma_pixels = sigma * resolution / box_size
+
+    smoothed_v_field_np = np.empty_like(v_field)
+
+    # Apply Gaussian filter to each component
+    for i in range(v_field.shape[0]):
+        smoothed_v_field_np[i] = ndi.gaussian_filter(
+            v_field[i], sigma=sigma_pixels, mode='wrap'
+        )
+
+    return smoothed_v_field_np
