@@ -134,9 +134,13 @@ def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
 
                 # Add name above circle
                 axes[j, 0].text(r, l + offset_y, name, color='black',
-                                ha='center', va='bottom', fontsize=8)
+                                ha='center', va='bottom', fontsize=8,
+                                bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                                          lw=0, alpha=0.7))
                 axes[j, 1].text(r, b + offset_y, name, color='black',
-                                ha='center', va='bottom', fontsize=8)
+                                ha='center', va='bottom', fontsize=8,
+                                bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                                          lw=0, alpha=0.7))
 
     for i in range(n_sigmas):
         axes[i, 0].set_ylabel(r"$\ell ~ [^\circ]$")
