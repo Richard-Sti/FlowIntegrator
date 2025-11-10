@@ -25,7 +25,7 @@ import jax.numpy as jnp
 from jax.scipy.ndimage import map_coordinates
 from tqdm.auto import tqdm
 
-from .utils import fprint
+from .utils import fprint, smooth_velocity_field_gaussian
 from .clustering import find_attractors_from_convergence
 from astropy.coordinates import SkyCoord, CartesianRepresentation
 import astropy.units as u
@@ -346,7 +346,7 @@ class TrajectoryFollower:
         else:
             self.map_coords_kwargs = map_coords_kwargs
 
-    def follow(self, initial_position):
+    def follow(self, initial_position, smooth_sigma=None):
         """
         Follows the trajectory of a single particle.
 
@@ -354,6 +354,10 @@ class TrajectoryFollower:
         ----------
         initial_position : jax.Array
             The starting position of the particle (shape (3,)).
+        smooth_sigma : float, optional
+            Standard deviation for Gaussian kernel in physical units (Mpc / h)
+            to smooth the velocity field. If None, no smoothing is applied.
+            Default: None.
 
         Returns
         -------
@@ -371,6 +375,19 @@ class TrajectoryFollower:
                 "initial_position must be a 1D array of shape (3,)"
             )
 
+        v_field = self.v_field
+        if smooth_sigma is not None and smooth_sigma > 0:
+            # Convert JAX array to NumPy array for smoothing
+            v_field_np = np.array(self.v_field)
+
+            # Smooth the velocity field
+            smoothed_v_field_np = smooth_velocity_field_gaussian(
+                v_field_np, self.box_size, smooth_sigma
+            )
+
+            # Convert back to JAX array
+            v_field = jax.device_put(smoothed_v_field_np)
+
         # The _rk2_step function expects positions_carry to be (N, 3).
         # For a single particle, we reshape it to (1, 3) and then back.
         single_particle_position = initial_position[jnp.newaxis, :]
@@ -378,7 +395,7 @@ class TrajectoryFollower:
         # Create a step function for lax.scan
         step_fn = partial(
             _rk2_step,
-            v_field=self.v_field,
+            v_field=v_field,
             ds=self.ds,
             map_coords_kwargs=tuple(self.map_coords_kwargs.items()),
             epsilon=self.epsilon,
@@ -504,3 +521,29 @@ class TrajectoryFollower:
                 galactic_coord.b.value
             ])
         return jnp.array(galactic_coords_data)
+
+    def follow_multiple_smoothing(self, initial_position, smoothing_scales):
+        """
+        Follows the trajectory of a single particle with multiple smoothing
+        scales.
+
+        Parameters
+        ----------
+        initial_position : jax.Array
+            The starting position of the particle (shape (3,)).
+        smoothing_scales : list of float
+            A list of standard deviations for the Gaussian kernel to smooth
+            the velocity field.
+
+        Returns
+        -------
+        list of tuple
+            A list of tuples, where each tuple contains the results from
+            the `follow` method for each smoothing scale:
+            (time_steps, trajectory, speeds_trajectory).
+        """
+        results = []
+        for sigma in tqdm(smoothing_scales, desc="Smoothing scales"):
+            result = self.follow(initial_position, smooth_sigma=sigma)
+            results.append(result)
+        return results
