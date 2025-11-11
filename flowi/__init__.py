@@ -16,6 +16,7 @@
 
 __version__ = "0.1.0"
 
+from .apertures import SphericalMeanDensity  # noqa
 from .integrator import Integrator, TrajectoryFollower  # noqa: F401
 from .loaders import ManticoreLoader  # noqa: F401
 from .utils import (  # noqa: F401
