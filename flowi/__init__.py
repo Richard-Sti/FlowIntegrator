@@ -16,9 +16,10 @@
 
 __version__ = "0.1.0"
 
-from .integrator import Integrator, TrajectoryFollower                          # noqa
-from .utils import (                                                            # noqa
-    fprint,                                                                     # noqa
-    create_initial_positions,                                                   # noqa
-    smooth_velocity_field_gaussian,                                             # noqa
-    )                                                                           # noqa
+from .integrator import Integrator, TrajectoryFollower  # noqa: F401
+from .loaders import ManticoreLoader  # noqa: F401
+from .utils import (  # noqa: F401
+    fprint,
+    create_initial_positions,
+    smooth_velocity_field_gaussian,
+)
