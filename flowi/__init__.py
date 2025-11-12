@@ -16,9 +16,12 @@
 
 __version__ = "0.1.0"
 
-from .apertures import SphericalMeanDensity  # noqa
+from .apertures import SphericalIntegrator  # noqa
 from .integrator import Integrator, TrajectoryFollower  # noqa: F401
-from .loaders import ManticoreLoader  # noqa: F401
+from .loaders import (  # noqa: F401
+    ManticoreLoader,
+    Carrick2015Loader,
+)
 from .utils import (  # noqa: F401
     fprint,
     create_initial_positions,
