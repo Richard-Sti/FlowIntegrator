@@ -24,21 +24,33 @@ import numpy as np
 class FieldLoader(ABC):
     """Abstract base class for simulation data loaders."""
 
-    def __init__(self, boxsize):
+    def __init__(self, boxsize, coordinate_system, resolution):
         self._boxsize = float(boxsize)
+        self._coordinate_system = str(coordinate_system)
+        self._resolution = int(resolution)
 
     @property
     def boxsize(self):
-        """Return the simulation box size."""
+        """Return the simulation box size (units: Mpc / h)."""
         return self._boxsize
+
+    @property
+    def coordinate_system(self):
+        """Return the coordinate system of the simulation."""
+        return self._coordinate_system
+
+    @property
+    def resolution(self):
+        """Return the grid resolution of the simulation."""
+        return self._resolution
 
     @abstractmethod
     def load_density_field(self):
-        """Return the density field as a NumPy array."""
+        """Return the density field (units: h^2 Msun / kpc^3)."""
 
     @abstractmethod
     def load_velocity_field(self):
-        """Return the velocity field as a NumPy array."""
+        """Return the velocity field as a NumPy array (units: km / s)."""
 
 
 class ManticoreLoader(FieldLoader):
@@ -56,23 +68,68 @@ class ManticoreLoader(FieldLoader):
     """
 
     def __init__(self, base_folder, simulation_number, boxsize=681.0):
-        super().__init__(boxsize)
         self.base_folder = Path(base_folder)
         self.simulation_number = int(simulation_number)
+        self._density_cache = None  # Initialize cache
+        with h5py.File(self._file_path(), "r") as handle:
+            resolution = handle["density"].shape[0]
+        super().__init__(
+            boxsize, coordinate_system="icrs", resolution=resolution
+        )
 
     def _file_path(self):
         name = f"mcmc_{self.simulation_number}.hdf5"
         return self.base_folder / name
 
+    def _load_original_density(self):
+        if self._density_cache is None:
+            with h5py.File(self._file_path(), "r") as handle:
+                self._density_cache = handle["density"][:]
+        return self._density_cache
+
     def load_density_field(self):
-        with h5py.File(self._file_path(), "r") as handle:
-            density = handle["density"][:]
-        return density
+        field = self._load_original_density().copy()
+        norm_factor = (self.boxsize * 1e3 / self.resolution) ** 3
+        field /= norm_factor
+        return field
 
     def load_velocity_field(self):
+        rho = self._load_original_density()
         with h5py.File(self._file_path(), "r") as handle:
-            rho = handle["density"][:]
             vx = handle["p0"][:] / rho
             vy = handle["p1"][:] / rho
             vz = handle["p2"][:] / rho
         return np.stack([vx, vy, vz], axis=0)
+
+
+class Carrick2015Loader(FieldLoader):
+    """
+    Loader for Carrick 2015 velocity field data.
+
+    Parameters
+    ----------
+    velocity_field_path : str or Path
+        Path to the .npy file containing the velocity field.
+    beta : float, optional
+        The beta parameter to scale the velocity field. Default is 0.43.
+    """
+
+    def __init__(self, velocity_field_path, beta=0.43):
+        self.velocity_field_path = Path(velocity_field_path)
+        velocity_field = np.load(self.velocity_field_path)
+        self._velocity_field = velocity_field
+        resolution = velocity_field.shape[1]
+        super().__init__(
+            boxsize=400,
+            coordinate_system="galactic",
+            resolution=resolution,
+        )
+        self.beta = float(beta)
+
+    def load_density_field(self):
+        raise NotImplementedError(
+            "Density field not available for Carrick 2015 data."
+        )
+
+    def load_velocity_field(self):
+        return self.beta * self._velocity_field
