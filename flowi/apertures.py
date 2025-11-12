@@ -15,6 +15,7 @@
 """Spherical aperture utilities."""
 
 import numpy as np
+from tqdm import tqdm
 
 
 def _sphere_offsets(cell, radius):
@@ -121,3 +122,47 @@ class SphericalIntegrator:
         if is_scalar_radius:
             return result[0]
         return result
+
+    def integrated_density_random_points(self, density, radii, num_points,
+                                         seed=None):
+        """
+        Computes the integrated density for multiple random points in the box.
+
+        Parameters
+        ----------
+        density : array_like
+            Density cube with shape
+            ``(resolution, resolution, resolution)``.
+        radii : float or array_like
+            Single sphere radius or array of sphere radii in physical units.
+        num_points : int
+            Number of random points to generate.
+        seed : int, optional
+            Seed for the random number generator.
+
+        Returns
+        -------
+        np.ndarray
+            A 2D array of enclosed masses in Msun / h, with shape
+            (num_points, len(radii)).
+        """
+        if seed is not None:
+            np.random.seed(seed)
+
+        random_points = np.random.uniform(
+            0, self.box_size, size=(num_points, 3))
+
+        # Ensure radii is an array for consistent length checking
+        radii_array = np.atleast_1d(radii)
+
+        # Pre-allocate the results array
+        results = np.empty((num_points, len(radii_array)), dtype=np.float64)
+
+        for i, point in enumerate(tqdm(random_points,
+                                       desc="Processing points")):
+            enclosed_masses = self.integrated_density_single(
+                density, point, radii
+            )
+            results[i] = enclosed_masses
+
+        return results
