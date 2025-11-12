@@ -61,9 +61,9 @@ class SphericalIntegrator:
             self._cache["offsets"] = offsets
         return self._cache["offsets"]
 
-    def integrated_density(self, density, points, radius):
+    def integrated_density_single(self, density, points, radii):
         """
-        Integrated density for a single cube.
+        Integrated density for a single cube for multiple radii.
 
         Parameters
         ----------
@@ -72,13 +72,14 @@ class SphericalIntegrator:
             ``(resolution, resolution, resolution)``.
         points : array_like
             Query position (3,).
-        radius : float
-            Sphere radius in physical units.
+        radii : float or array_like
+            Single sphere radius or array of sphere radii in physical units.
 
         Returns
         -------
-        float
-            Enclosed mass in Msun / h.
+        float or np.ndarray
+            Enclosed mass in Msun / h. Returns a float if a single radius
+            is provided, otherwise returns an array.
         """
         density = np.asarray(density)
         shape = (self.resolution,) * 3
@@ -89,21 +90,34 @@ class SphericalIntegrator:
         if points.ndim != 1 or points.shape != (3,):
             raise ValueError(
                 "points must have shape (3,) for a single query point"
-                )
+            )
         points = points[None, :]  # Reshape to (1, 3)
 
-        offsets = self._get_indices(radius)
-        centers = _points_to_indices(points, self.cell, self.resolution)
+        # Check if radii is a scalar or an array
+        is_scalar_radius = np.isscalar(radii)
+        radii = np.atleast_1d(radii).astype(np.float64)
 
-        idx = (centers[:, None, :] + offsets[None, :, :]) % self.resolution
-        linear = np.ravel_multi_index(
-            (idx[..., 0], idx[..., 1], idx[..., 2]),
-            dims=(self.resolution,) * 3,
-        )
+        if radii.ndim != 1:
+            raise ValueError("radii must be a scalar or a 1D array")
 
-        values = density.ravel()[linear]
+        enclosed_masses = []
+        for r in radii:
+            offsets = self._get_indices(r)
+            centers = _points_to_indices(points, self.cell, self.resolution)
 
-        # The density is in h^2 Msun / kpc^3, and the cell volume is
-        # in (Mpc/h)^3.
-        enclosed_mass = np.sum(values) * self.cell**3
-        return enclosed_mass * 1e9
+            idx = (centers[:, None, :] + offsets[None, :, :]) % self.resolution
+            linear = np.ravel_multi_index(
+                (idx[..., 0], idx[..., 1], idx[..., 2]),
+                dims=(self.resolution,) * 3,
+            )
+
+            values = density.ravel()[linear]
+
+            # in (Mpc/h)^3. The conversion factor to Msun / h is 1e9.
+            enclosed_mass = np.sum(values) * self.cell**3
+            enclosed_masses.append(enclosed_mass * 1e9)
+
+        result = np.array(enclosed_masses)
+        if is_scalar_radius:
+            return result[0]
+        return result
