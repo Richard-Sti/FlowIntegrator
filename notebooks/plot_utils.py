@@ -121,7 +121,7 @@ def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
     if plot_attractors:
         attractors = {
             'Virgo': (12, 284, 74),
-            'Great Attractor': (49, 308, 29),
+            'Great Attractor': (49, 325, -7),
             'Shapley': (138, 312.5, 30.3)
         }
         offset_y = 5  # Adjust this value as needed for proper spacing
@@ -155,6 +155,105 @@ def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
         secax.set_ticks([])
 
         if i == n_sigmas - 1:  # Only for the last row
+            axes[i, 0].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
+            axes[i, 1].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
+
+    fig.tight_layout()
+    plt.close()
+
+    return fig, axes
+
+
+def plot_realization_trajectories(realization_trajectories, sigmas, intg,
+                                  observer_location, input_frame,
+                                  panel_height=3, plot_attractors=True):
+    """
+    Visualizes trajectories from multiple field realizations.
+
+    Parameters
+    ----------
+    realization_trajectories : list of list of tuple
+        A list where each element is the output of
+        `follow_multiple_smoothing` for a single realization.
+    sigmas : list of float
+        The list of smoothing scales.
+    intg : TrajectoryFollower
+        The TrajectoryFollower instance.
+    observer_location : numpy.ndarray
+        The 3D position of the observer.
+    input_frame : str
+        The Astropy frame of the input Cartesian coordinates.
+    panel_height : float, optional
+        The height of each individual panel. Default is 3.
+    plot_attractors : bool, optional
+        If True, plot the positions of attractors. Default is True.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The matplotlib Figure object containing the plot.
+    """
+    n_sigmas = len(sigmas)
+    fig, axes = plt.subplots(n_sigmas, 2, figsize=(8, panel_height * n_sigmas),
+                             sharex=True, sharey='col')
+
+    if n_sigmas == 1:
+        axes = np.array([axes])
+
+    for i, sigma in enumerate(sigmas):
+        ax_row = axes[i]
+        for trajectories in realization_trajectories:
+            # trajectories is the output of follow_multiple_smoothing
+            # It's a list of (t, xf, vmag) for each sigma
+            # I need to get the one for the current sigma
+            t, xf, vmag = trajectories[i]  # Assuming the order is the same
+
+            xf = xf[::10]
+
+            xf_gal = intg.to_galactic(xf, observer_location, input_frame)
+
+            r = xf_gal[:, 0]
+            ell = xf_gal[:, 1]
+            b = xf_gal[:, 2]
+
+            ax_row[0].plot(r, ell, color='black', alpha=0.5, lw=0.5)
+            ax_row[1].plot(r, b, color='black', alpha=0.5, lw=0.5)
+
+    if plot_attractors:
+        attractors = {
+            'Virgo': (12, 284, 74),
+            'Great Attractor': (49, 325, -7),
+            'Shapley': (138, 312.5, 30.3)
+        }
+        offset_y = 5
+
+        for i, (name, (r, l, b)) in enumerate(attractors.items()):
+            for j in range(n_sigmas):
+                axes[j, 0].plot(r, l, 'o', color='black', markersize=5)
+                axes[j, 1].plot(r, b, 'o', color='black', markersize=5)
+
+                axes[j, 0].text(r, l + offset_y, name, color='black',
+                                ha='center', va='bottom', fontsize=8,
+                                bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                                          lw=0, alpha=0.7))
+                axes[j, 1].text(r, b + offset_y, name, color='black',
+                                ha='center', va='bottom', fontsize=8,
+                                bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                                          lw=0, alpha=0.7))
+
+    for i in range(n_sigmas):
+        axes[i, 0].set_ylabel(r"$\ell ~ [^\circ]$")
+        axes[i, 1].set_ylabel(r"$b ~ [^\circ]$")
+
+        secax = axes[i, 1].secondary_yaxis('right')
+        if sigmas[i] == 0:
+            sigma_label = "No smoothing"
+        else:
+            sigma_label = (fr"$\sigma = {sigmas[i]} h^{{-1}} \mathrm{{Mpc}}$")
+        secax.set_ylabel(sigma_label)
+        secax.set_ticks([])
+
+        if i == n_sigmas - 1:
             axes[i, 0].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
             axes[i, 1].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
 
