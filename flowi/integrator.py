@@ -26,7 +26,10 @@ from jax.scipy.ndimage import map_coordinates
 from tqdm.auto import tqdm
 
 from .utils import fprint, smooth_velocity_field_gaussian
-from .clustering import find_attractors_from_convergence
+from .clustering import (
+    find_attractors_from_convergence,
+    find_attractors_by_voxel_counting
+)
 from astropy.coordinates import SkyCoord, CartesianRepresentation
 import astropy.units as u
 import numpy as np
@@ -157,8 +160,8 @@ class Integrator:
             map_coords_kwargs.pop('adaptive')
 
         # Enforce maximum spatial step size
-        resolution = self.v_field.shape[1]
-        max_ds = (self.box_size / resolution) / 2.0
+        self.resolution = self.v_field.shape[1]
+        max_ds = (self.box_size / self.resolution) / 2.0
         if self.ds > max_ds:
             fprint(f"Warning: Provided ds ({self.ds}) is larger than "
                    f"half the resolution element ({max_ds}). "
@@ -295,6 +298,36 @@ class Integrator:
             self.v_field.shape,
             dbscan_eps,
             dbscan_min_samples,
+        )
+
+    def get_cluster_info_voxel(self, positions, displacement_over_n_steps,
+                               min_count=1):
+        """
+        Finds attractors by counting converged streamlines in voxels.
+
+        Parameters
+        ----------
+        positions : jax.Array
+            The final positions of all particles.
+        displacement_over_n_steps : jax.Array
+            The displacement of each particle over the last n_steps_check
+            steps.
+        min_count : int, optional
+            Minimum number of converged particles in a voxel to be considered
+            an attractor. Default: 1.
+
+        Returns
+        -------
+        AttractorCollection
+            An `AttractorCollection` object containing `AttractorInfo` objects
+            for each voxel with converged particles.
+        """
+        return find_attractors_by_voxel_counting(
+            positions,
+            displacement_over_n_steps,
+            self.box_size,
+            grid_resolution=self.resolution,
+            min_count=min_count
         )
 
 
@@ -522,7 +555,8 @@ class TrajectoryFollower:
             ])
         return jnp.array(galactic_coords_data)
 
-    def follow_multiple_smoothing(self, initial_position, smoothing_scales):
+    def follow_multiple_smoothing(self, initial_position, smoothing_scales,
+                                  verbose=True):
         """
         Follows the trajectory of a single particle with multiple smoothing
         scales.
@@ -534,6 +568,8 @@ class TrajectoryFollower:
         smoothing_scales : list of float
             A list of standard deviations for the Gaussian kernel to smooth
             the velocity field.
+        verbose : bool, optional
+            If True, show a progress bar over smoothing scales. Default: True.
 
         Returns
         -------
@@ -543,7 +579,8 @@ class TrajectoryFollower:
             (time_steps, trajectory, speeds_trajectory).
         """
         results = []
-        for sigma in tqdm(smoothing_scales, desc="Smoothing scales"):
+        for sigma in tqdm(smoothing_scales, desc="Smoothing scales",
+                          disable=not verbose):
             result = self.follow(initial_position, smooth_sigma=sigma)
             results.append(result)
         return results
