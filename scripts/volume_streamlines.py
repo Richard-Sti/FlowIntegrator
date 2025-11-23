@@ -14,13 +14,13 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Cluster converged streamlines in Manticore velocity fields."""
 
-from pathlib import Path
-
 import flowi
 import numpy as np
 from h5py import File, vlen_dtype
 from jax import numpy as jnp
 from tqdm import trange
+
+from config import data_root, results_root
 
 
 def load_manticore_velocity(base_folder, simulation_number):
@@ -61,8 +61,7 @@ def write_sigma_group(field_group, sigma, metadata, attractors):
 
 
 def main():
-    data_root = Path("/Users/rstiskalek/Data/Manticore/N256")
-    output = Path("../results/manticore_voxel_clusters.hdf5")
+    output = results_root / "manticore_voxel_clusters.hdf5"
 
     n_fields = 1
     num_steps = 25_000

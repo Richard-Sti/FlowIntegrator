@@ -14,17 +14,16 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Compute GA enclosed mass profiles from GA centroids."""
 
-from pathlib import Path
-
 import flowi
 import numpy as np
 from h5py import File
 
+from config import data_root, results_root
+
 
 def main():
-    ga_file = Path("../results/GA_analysis.hdf5")
-    data_root = Path("/Users/rstiskalek/Data/Manticore/N256")
-    output_file = Path("../results/GA_enclosed_mass.hdf5")
+    ga_file = results_root / "GA_analysis.hdf5"
+    output_file = results_root / "GA_enclosed_mass.hdf5"
 
     sigma_target = 0.0
     radii = np.linspace(5.0, 50.0, 100)  # Mpc / h

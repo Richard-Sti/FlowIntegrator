@@ -14,13 +14,13 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Generate Milky Way streamlines across Manticore velocity fields."""
 
-from pathlib import Path
-
 import flowi
 import h5py
 import numpy as np
 from jax import numpy as jnp
 from tqdm import trange
+
+from config import data_root, results_root
 
 
 def load_manticore_velocity(base_folder, simulation_number):
@@ -29,12 +29,11 @@ def load_manticore_velocity(base_folder, simulation_number):
 
 
 def main():
-    data_root = Path("/Users/rstiskalek/Data/Manticore/N256")
     n_fields = 80
     num_steps = 20_000
     ds_factor = 0.05
     smoothing_scales = np.arange(0, 17)  # Mpc/h
-    output = Path("../results/MW_streamlines.hdf5")
+    output = results_root / "MW_streamlines.hdf5"
 
     output.parent.mkdir(parents=True, exist_ok=True)
 

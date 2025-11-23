@@ -14,11 +14,11 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Analyse Great Attractor volume from voxel clustering outputs."""
 
-from pathlib import Path
-
 import flowi
 import numpy as np
 from h5py import File
+
+from config import data_root, results_root
 
 
 def enforce_full_grid(h5_handle):
@@ -134,9 +134,9 @@ def analyse_sigma(
 
 def main():
     """Loop over all fields/smoothing scales and save GA metrics."""
-    result_file = Path("../results/manticore_voxel_clusters.hdf5")
-    output_file = Path("../results/GA_analysis.hdf5")
-    data_root = Path("/Users/rstiskalek/Data/Manticore/N256")
+    result_file = results_root / "manticore_voxel_clusters.hdf5"
+    output_file = results_root / "GA_analysis.hdf5"
+
     ga_position = np.array([340.0, 340.0, 340.0])  # Mpc / h
     ga_tolerance = 10.0  # Mpc / h
 

@@ -14,13 +14,13 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Plot GA projections in supergalactic and Galactic coordinates."""
 
-from pathlib import Path
-
 import flowi
 import healpy as hp
 import matplotlib.pyplot as plt
 import numpy as np
 from h5py import File
+
+from config import data_root, results_root
 
 
 def voxel_indices(center, width, box_size, resolution):
@@ -115,10 +115,10 @@ def plot_healpy_mass(l_deg, b_deg, mass, nside, outfile):
 
 
 def main():
-    ga_file = Path("../results/GA_analysis.hdf5")
-    cluster_file = Path("../results/manticore_voxel_clusters.hdf5")
-    data_root = Path("/Users/rstiskalek/Data/Manticore/N256")
-    out_dir = Path("../results/GA_plots")
+    ga_file = results_root / "GA_analysis.hdf5"
+    cluster_file = results_root / "manticore_voxel_clusters.hdf5"
+    out_dir = results_root / "GA_plots"
+
     slab_width = 50.0  # Mpc / h
     nside = 64
     sigma_target = 0.0
