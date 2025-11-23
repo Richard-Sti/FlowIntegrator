@@ -159,7 +159,7 @@ def main():
                     min_count=min_count
                 )
                 fprint(f"Finished attractor clustering for field {sim}, "
-                       "sigma={sigma}. Found {len(attractors)} attractors.")
+                       f"sigma={sigma}. Found {len(attractors)} attractors.")
                 kept_attractors = [attractors[idx]
                                    for idx in range(len(attractors))]
 
