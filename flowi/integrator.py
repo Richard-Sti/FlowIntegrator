@@ -175,7 +175,7 @@ class Integrator:
         else:
             self.map_coords_kwargs = map_coords_kwargs
 
-    def run(self, initial_positions, chunk_size=None):
+    def run(self, initial_positions, chunk_size=None, verbose=True):
         """
         Runs the full integration with a progress indicator.
 
@@ -186,6 +186,8 @@ class Integrator:
         chunk_size : int, optional
             The number of steps to run in each chunk. If None, it defaults
             to 10% of `num_steps`. Default: None.
+        verbose : bool, optional
+            If False, suppress progress and info printing. Default: True.
 
         Returns
         -------
@@ -196,7 +198,8 @@ class Integrator:
             - jax.Array: The displacement of each particle over the
               last `n_steps_check` steps.
         """
-        fprint("Compiling and running JIT-compiled integration...")
+        fprint("Compiling and running JIT-compiled integration...",
+               verbose=verbose)
 
         if chunk_size is None:
             chunk_size = max(1, self.num_steps // 100)
@@ -212,7 +215,8 @@ class Integrator:
             initial_positions.shape[0]
         )
 
-        with tqdm(total=self.num_steps, desc="Integrating") as pbar:
+        with tqdm(total=self.num_steps, desc="Integrating",
+                  disable=not verbose) as pbar:
             for _ in range(0, self.num_steps, chunk_size):
                 positions, _ = _chunked_scan(
                     positions, None, self.v_field, self.ds,
@@ -233,7 +237,7 @@ class Integrator:
                     self.checkpoint_positions = positions
                     self.step_counter = 0
 
-        fprint("Integration complete.")
+        fprint("Integration complete.", verbose=verbose)
 
         # Calculate final speeds
         final_velocities = _get_velocity(
@@ -256,7 +260,7 @@ class Integrator:
             f"Fraction of particles with displacement over "
             f"{self.n_steps_check} steps less than "
             f"half a resolution element ({half_resolution_element:.2e}): "
-            f"{fraction_converged:.2%}"
+            f"{fraction_converged:.2%}", verbose=verbose
         )
 
         return positions, final_speeds, self.displacement_over_n_steps
