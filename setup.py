@@ -47,6 +47,7 @@ setup(
         "h5py",
         "scikit-learn",
         "astropy",
+        "healpy",
     ],
     include_package_data=True,
     zip_safe=False,
