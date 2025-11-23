@@ -5,3 +5,5 @@ GEMINI.md
 flowi.egg-info
 venv_flowi
 */__pycache__/
+
+results/
