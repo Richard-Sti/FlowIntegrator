@@ -17,6 +17,7 @@
 import flowi
 import jax
 import numpy as np
+from flowi import fprint
 from h5py import File, vlen_dtype
 from jax import numpy as jnp
 from tqdm import trange
@@ -72,7 +73,7 @@ def main():
     ds_factor = 0.05
     ngrid_particles = None
     max_distance = 200  # Mpc / h
-    min_cluster_fraction = 0.01
+    min_cluster_fraction = 1e-5
     smoothing_scales = [0.0, 2.0, 4.0, 16.0]  # Mpc / h
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -146,13 +147,19 @@ def main():
                     ds=ds
                 )
 
+                fprint(f"Integrating streamlines for field {sim}, "
+                       f"sigma={sigma}...")
                 xf, _, dx_step = integrator.run(x0, verbose=True)
 
+                fprint(f"Starting attractor clustering for field {sim}, "
+                       f"sigma={sigma}...")
                 attractors = integrator.get_cluster_info_voxel(
                     xf,
                     dx_step,
                     min_count=min_count
                 )
+                fprint(f"Finished attractor clustering for field {sim}, "
+                       "sigma={sigma}. Found {len(attractors)} attractors.")
                 kept_attractors = [attractors[idx]
                                    for idx in range(len(attractors))]
 
@@ -161,7 +168,7 @@ def main():
                     np.mean(np.asarray(dx_step) < resolution_element)
                 )
 
-                flowi.fprint(
+                fprint(
                     f"Field {sim}, sigma={sigma}: "
                     f"{len(kept_attractors)} clusters kept "
                     f"with min_count={min_count}; "
