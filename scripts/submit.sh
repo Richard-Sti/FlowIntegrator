@@ -4,15 +4,15 @@
 #SBATCH --mail-type=BEGIN,FAIL,END
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1 --constraint="cpu_gen:Cascade_Lake|cpu_gen:Skylake"
-#SBATCH --time=08:00:00
+#SBATCH --time=01:00:00
 #SBATCH --mem=32G
 #SBATCH --job-name=flowi
 #SBATCH --output=logs/logs-%j.out
 #SBATCH --error=logs/logs-%j.err
 
 # --- User configuration ---
-PYTHON_ENV_ACTIVATE="" # <<< EDIT THIS LINE
-PYTHON_SCRIPT_TO_RUN="scripts/volume_streamlines.py"
+PYTHON_EXEC="/home/phys1997/CANDEL/venv_candel/bin/python"
+PYTHON_SCRIPT_TO_RUN="MW_streamlines.py"
 
 # --- Main script logic ---
 # Report requested time
@@ -32,8 +32,8 @@ if [[ -z "$PYTHON_ENV_ACTIVATE" ]]; then
 fi
 
 # Activate the Python environment
-echo "[INFO] Activating Python environment: $PYTHON_ENV_ACTIVATE"
-source "$PYTHON_ENV_ACTIVATE"
+# echo "[INFO] Activating Python environment: $PYTHON_ENV_ACTIVATE"
+# source "$PYTHON_ENV_ACTIVATE"
 
 # Load required modules for ARC
 echo "[INFO] Loading modules for machine: arc"
@@ -46,6 +46,6 @@ export XLA_FLAGS="--xla_hlo_profile=false --xla_dump_to=/tmp/nowhere"
 
 # Run the python script
 echo "[INFO] Running Python script: $PYTHON_SCRIPT_TO_RUN"
-python "$PYTHON_SCRIPT_TO_RUN"
+eval "$PYTHON_EXEC $PYTHON_SCRIPT_TO_RUN"
 
 echo "[INFO] Script finished."
