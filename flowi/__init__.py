@@ -26,4 +26,6 @@ from .utils import (  # noqa: F401
     fprint,
     create_initial_positions,
     smooth_velocity_field_gaussian,
+    smooth_scalar_field_gaussian,
+    cartesian_icrs_to_galactic_spherical,
 )

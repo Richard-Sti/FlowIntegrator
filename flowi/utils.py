@@ -20,9 +20,12 @@ preparing data.
 
 import datetime
 
+import astropy.units as u
 import jax.numpy as jnp
 import numpy as np
 import scipy.ndimage as ndi
+from astropy.coordinates import (ICRS, CartesianRepresentation, Galactic,
+                                 SphericalRepresentation)
 
 
 def fprint(*args, verbose=True, **kwargs):
@@ -142,3 +145,35 @@ def smooth_velocity_field_gaussian(v_field, box_size, sigma):
         )
 
     return smoothed_v_field_np
+
+
+def smooth_scalar_field_gaussian(field, box_size, sigma):
+    """
+    Smooth a 3D scalar field with a Gaussian kernel in physical units.
+    """
+    resolution = field.shape[0]
+    sigma_pixels = sigma * resolution / box_size
+    return ndi.gaussian_filter(field, sigma=sigma_pixels, mode='wrap')
+
+
+def cartesian_icrs_to_galactic_spherical(pos, center):
+    """
+    Convert ICRS Cartesian coordinates to Galactic spherical coordinates
+    (r, ell, b) about a fixed pivot `center` (observer).
+    """
+    pos_q = u.Quantity(pos, copy=False)
+    cen_q = u.Quantity(center, copy=False)
+
+    # Broadcast and shift to the chosen center.
+    rel = pos_q - cen_q  # shape (..., 3)
+
+    rep = CartesianRepresentation(rel[..., 0], rel[..., 1], rel[..., 2])
+    icrs = ICRS(rep)
+    gal = icrs.transform_to(Galactic())
+    sph = gal.represent_as(SphericalRepresentation)
+
+    ell = sph.lon.to(u.deg).value
+    b = sph.lat.to(u.deg).value
+    r = sph.distance.value
+
+    return r, ell, b
