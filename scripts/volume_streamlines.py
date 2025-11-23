@@ -68,12 +68,12 @@ def main():
 
     output = results_root / "manticore_voxel_clusters.hdf5"
 
-    n_fields = 1
+    n_fields = 80
     num_steps = 25_000
     ds_factor = 0.05
     ngrid_particles = None
     max_distance = 200  # Mpc / h
-    min_cluster_fraction = 1e-5
+    min_cluster_fraction = 1e-4
     smoothing_scales = [0.0, 2.0, 4.0, 16.0]  # Mpc / h
 
     output.parent.mkdir(parents=True, exist_ok=True)
