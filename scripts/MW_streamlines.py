@@ -33,7 +33,7 @@ def main():
     n_fields = 80
     num_steps = 20_000
     ds_factor = 0.05
-    smoothing_scales = [0.0, 2.0, 4.0, 16.0]  # Mpc/h
+    smoothing_scales = np.arange(0, 17)  # Mpc/h
     output = Path("../results/MW_streamlines.hdf5")
 
     output.parent.mkdir(parents=True, exist_ok=True)
