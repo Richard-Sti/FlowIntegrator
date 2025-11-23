@@ -1,0 +1,51 @@
+#!/bin/bash
+#SBATCH --partition=short
+#SBATCH --mail-user=richard.stiskalek@physics.ox.ac.uk
+#SBATCH --mail-type=BEGIN,FAIL,END
+#SBATCH --ntasks=1
+#SBATCH --gres=gpu:1 --constraint="cpu_gen:Cascade_Lake|cpu_gen:Skylake"
+#SBATCH --time=08:00:00
+#SBATCH --mem=32G
+#SBATCH --job-name=flowi
+#SBATCH --output=logs/logs-%j.out
+#SBATCH --error=logs/logs-%j.err
+
+# --- User configuration ---
+PYTHON_ENV_ACTIVATE="/home/phys1997/CANDEL/venv_candel/bin"
+PYTHON_SCRIPT_TO_RUN="scripts/volume_streamlines.py"
+
+# --- Main script logic ---
+# Report requested time
+if [[ -n "$SLURM_TIMELIMIT" ]]; then
+    hrs=$((SLURM_TIMELIMIT / 60))
+    mins=$((SLURM_TIMELIMIT % 60))
+    echo "[INFO] SLURM time limit requested: ${hrs}h ${mins}m"
+fi
+
+set -e
+
+# Check if the Python environment is set
+if [[ -z "$PYTHON_ENV_ACTIVATE" ]]; then
+    echo "[ERROR] The PYTHON_ENV_ACTIVATE variable is not set in the script."
+    echo "[ERROR] Please edit this script to specify the path to your Python environment's 'activate' script."
+    exit 1
+fi
+
+# Activate the Python environment
+echo "[INFO] Activating Python environment: $PYTHON_ENV_ACTIVATE"
+source "$PYTHON_ENV_ACTIVATE"
+
+# Load required modules for ARC
+echo "[INFO] Loading modules for machine: arc"
+module --force purge
+module add Python/3.11.3-GCCcore-12.3.0
+module add CUDA/11.8.0
+
+# Set XLA flags
+export XLA_FLAGS="--xla_hlo_profile=false --xla_dump_to=/tmp/nowhere"
+
+# Run the python script
+echo "[INFO] Running Python script: $PYTHON_SCRIPT_TO_RUN"
+python "$PYTHON_SCRIPT_TO_RUN"
+
+echo "[INFO] Script finished."
