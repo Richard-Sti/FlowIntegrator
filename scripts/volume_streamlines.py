@@ -15,6 +15,7 @@
 """Cluster converged streamlines in Manticore velocity fields."""
 
 import flowi
+import jax
 import numpy as np
 from h5py import File, vlen_dtype
 from jax import numpy as jnp
@@ -61,6 +62,9 @@ def write_sigma_group(field_group, sigma, metadata, attractors):
 
 
 def main():
+    print(f"JAX backend: {jax.default_backend()}")
+    print(f"JAX devices: {jax.devices()}")
+
     output = results_root / "manticore_voxel_clusters.hdf5"
 
     n_fields = 1

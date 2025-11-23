@@ -16,6 +16,7 @@
 
 import flowi
 import h5py
+import jax
 import numpy as np
 from jax import numpy as jnp
 from tqdm import trange
@@ -29,6 +30,9 @@ def load_manticore_velocity(base_folder, simulation_number):
 
 
 def main():
+    print(f"JAX backend: {jax.default_backend()}")
+    print(f"JAX devices: {jax.devices()}")
+
     n_fields = 80
     num_steps = 20_000
     ds_factor = 0.05
