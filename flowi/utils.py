@@ -105,7 +105,7 @@ def create_initial_positions(box_size, resolution, N=None,
         )
         initial_positions = initial_positions[distances <= max_distance]
         fprint(f"Filtered to {initial_positions.shape[0]} particles "
-               f"within {max_distance} of observer.")
+               f"within {max_distance} Mpc/h of observer.")
 
     fprint(f"Initialized {initial_positions.shape[0]} particles on device.")
     return initial_positions
