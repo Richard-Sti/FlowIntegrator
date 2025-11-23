@@ -24,8 +24,13 @@ import astropy.units as u
 import jax.numpy as jnp
 import numpy as np
 import scipy.ndimage as ndi
-from astropy.coordinates import (ICRS, CartesianRepresentation, Galactic,
-                                 SphericalRepresentation)
+from astropy.coordinates import (
+    ICRS,
+    CartesianRepresentation,
+    Galactic,
+    SphericalRepresentation,
+    Supergalactic,
+)
 
 
 def fprint(*args, verbose=True, **kwargs):
@@ -156,24 +161,30 @@ def smooth_scalar_field_gaussian(field, box_size, sigma):
     return ndi.gaussian_filter(field, sigma=sigma_pixels, mode='wrap')
 
 
-def cartesian_icrs_to_galactic_spherical(pos, center):
-    """
-    Convert ICRS Cartesian coordinates to Galactic spherical coordinates
-    (r, ell, b) about a fixed pivot `center` (observer).
-    """
+def _cartesian_icrs_to_spherical(pos, center, frame_cls):
+    """Convert ICRS Cartesian positions to spherical in target frame."""
     pos_q = u.Quantity(pos, copy=False)
     cen_q = u.Quantity(center, copy=False)
 
-    # Broadcast and shift to the chosen center.
-    rel = pos_q - cen_q  # shape (..., 3)
+    rel = pos_q - cen_q
 
     rep = CartesianRepresentation(rel[..., 0], rel[..., 1], rel[..., 2])
     icrs = ICRS(rep)
-    gal = icrs.transform_to(Galactic())
-    sph = gal.represent_as(SphericalRepresentation)
+    tgt = icrs.transform_to(frame_cls())
+    sph = tgt.represent_as(SphericalRepresentation)
 
     ell = sph.lon.to(u.deg).value
     b = sph.lat.to(u.deg).value
     r = sph.distance.value
 
     return r, ell, b
+
+
+def cartesian_icrs_to_galactic_spherical(pos, center):
+    """ICRS Cartesian to Galactic spherical about center."""
+    return _cartesian_icrs_to_spherical(pos, center, Galactic)
+
+
+def cartesian_icrs_to_supergalactic_spherical(pos, center):
+    """ICRS Cartesian to supergalactic spherical about center."""
+    return _cartesian_icrs_to_spherical(pos, center, Supergalactic)
