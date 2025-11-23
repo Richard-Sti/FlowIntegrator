@@ -11,7 +11,7 @@
 #SBATCH --error=logs/logs-%j.err
 
 # --- User configuration ---
-PYTHON_ENV_ACTIVATE="/home/phys1997/CANDEL/venv_candel/bin"
+PYTHON_ENV_ACTIVATE="" # <<< EDIT THIS LINE
 PYTHON_SCRIPT_TO_RUN="scripts/volume_streamlines.py"
 
 # --- Main script logic ---
