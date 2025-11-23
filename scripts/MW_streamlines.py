@@ -73,6 +73,7 @@ def main():
                 s_grp.create_dataset("trajectory", data=x_s,
                                      compression="gzip")
                 s_grp.create_dataset("speed", data=v_s, compression="gzip")
+    print(f"Saved streamlines to {output.resolve()}")
 
 
 if __name__ == "__main__":
