@@ -24,16 +24,6 @@ fi
 
 set -e
 
-# Check if the Python environment is set
-if [[ -z "$PYTHON_ENV_ACTIVATE" ]]; then
-    echo "[ERROR] The PYTHON_ENV_ACTIVATE variable is not set in the script."
-    echo "[ERROR] Please edit this script to specify the path to your Python environment's 'activate' script."
-    exit 1
-fi
-
-# Activate the Python environment
-# echo "[INFO] Activating Python environment: $PYTHON_ENV_ACTIVATE"
-# source "$PYTHON_ENV_ACTIVATE"
 
 # Load required modules for ARC
 echo "[INFO] Loading modules for machine: arc"
