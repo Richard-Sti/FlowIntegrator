@@ -79,7 +79,7 @@ def write_records(records, output_path):
 
 def main():
     h5_file = Path("../results/MW_streamlines.hdf5")
-    sigma_targets = [2, 3, 4, 5]  # Choose smoothing scales to extract
+    sigma_targets = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     output_dir = Path("../results")
 
     output_dir.mkdir(parents=True, exist_ok=True)
