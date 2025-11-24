@@ -13,8 +13,12 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
+import h5py
 import numpy as np
 import matplotlib.pyplot as plt
+from pathlib import Path
+
+import flowi
 
 
 def plot_trajectory_galactic(xf_gal, t):
@@ -71,9 +75,10 @@ def plot_trajectory_galactic(xf_gal, t):
     return fig, axes
 
 
-def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
-                                        observer_location, input_frame,
-                                        panel_height=3, plot_attractors=True):
+def plot_multiple_trajectories_galactic(
+    trajectories, smoothing_scales, intg, observer_location,
+    input_frame, panel_height=3, plot_attractors=True
+):
     """
     Visualizes multiple trajectories with different smoothing scales in
     Galactic coordinates.
@@ -82,7 +87,7 @@ def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
     ----------
     trajectories : list of tuple
         A list of trajectory results from `follow_multiple_smoothing`.
-    sigmas : list of float
+    smoothing_scales : list of float
         The list of smoothing scales corresponding to the trajectories.
     intg : TrajectoryFollower
         The TrajectoryFollower instance used to generate the trajectories.
@@ -101,9 +106,11 @@ def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
     matplotlib.figure.Figure
         The matplotlib Figure object containing the plot.
     """
-    n_sigmas = len(sigmas)
-    fig, axes = plt.subplots(n_sigmas, 2, figsize=(8, panel_height * n_sigmas),
-                             sharex=True, sharey='col')
+    n_sigmas = len(smoothing_scales)
+    fig, axes = plt.subplots(
+        n_sigmas, 2, figsize=(8, panel_height * n_sigmas),
+        sharex=True, sharey='col'
+    )
 
     if n_sigmas == 1:
         axes = np.array([axes])  # Make it 2D for consistent indexing
@@ -133,24 +140,30 @@ def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
                 axes[j, 1].plot(r, b, 'o', color='black', markersize=5)
 
                 # Add name above circle
-                axes[j, 0].text(r, l + offset_y, name, color='black',
-                                ha='center', va='bottom', fontsize=8,
-                                bbox=dict(boxstyle="round,pad=0.3", fc="white",
-                                          lw=0, alpha=0.7))
-                axes[j, 1].text(r, b + offset_y, name, color='black',
-                                ha='center', va='bottom', fontsize=8,
-                                bbox=dict(boxstyle="round,pad=0.3", fc="white",
-                                          lw=0, alpha=0.7))
+                axes[j, 0].text(
+                    r, l + offset_y, name, color='black',
+                    ha='center', va='bottom', fontsize=8,
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                              lw=0, alpha=0.7)
+                )
+                axes[j, 1].text(
+                    r, b + offset_y, name, color='black',
+                    ha='center', va='bottom', fontsize=8,
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                              lw=0, alpha=0.7)
+                )
 
     for i in range(n_sigmas):
         axes[i, 0].set_ylabel(r"$\ell ~ [^\circ]$")
         axes[i, 1].set_ylabel(r"$b ~ [^\circ]$")
 
         secax = axes[i, 1].secondary_yaxis('right')
-        if sigmas[i] == 0:
+        if smoothing_scales[i] == 0:
             sigma_label = "No smoothing"
         else:
-            sigma_label = (fr"$\sigma = {sigmas[i]} h^{{-1}} \mathrm{{Mpc}}$")
+            sigma_label = (
+                fr"$\sigma = {smoothing_scales[i]} h^{{-1}} \mathrm{{Mpc}}$"
+            )
         secax.set_ylabel(sigma_label)
         secax.set_ticks([])
 
@@ -164,9 +177,11 @@ def plot_multiple_trajectories_galactic(trajectories, sigmas, intg,
     return fig, axes
 
 
-def plot_realization_trajectories(realization_trajectories, sigmas, intg,
+def plot_realization_trajectories(realization_trajectories,
+                                  smoothing_scales, intg,
                                   observer_location, input_frame,
-                                  panel_height=3, plot_attractors=True):
+                                  panel_height=3, plot_attractors=True,
+                                  downsample=10):
     """
     Visualizes trajectories from multiple field realizations.
 
@@ -175,7 +190,7 @@ def plot_realization_trajectories(realization_trajectories, sigmas, intg,
     realization_trajectories : list of list of tuple
         A list where each element is the output of
         `follow_multiple_smoothing` for a single realization.
-    sigmas : list of float
+    smoothing_scales : list of float
         The list of smoothing scales.
     intg : TrajectoryFollower
         The TrajectoryFollower instance.
@@ -187,28 +202,34 @@ def plot_realization_trajectories(realization_trajectories, sigmas, intg,
         The height of each individual panel. Default is 3.
     plot_attractors : bool, optional
         If True, plot the positions of attractors. Default is True.
+    downsample : int, optional
+        Plot every nth trajectory point to reduce plotting load. Default is 10.
 
     Returns
     -------
     matplotlib.figure.Figure
         The matplotlib Figure object containing the plot.
     """
-    n_sigmas = len(sigmas)
-    fig, axes = plt.subplots(n_sigmas, 2, figsize=(8, panel_height * n_sigmas),
-                             sharex=True, sharey='col')
+    n_sigmas = len(smoothing_scales)
+    fig, axes = plt.subplots(
+        n_sigmas, 2, figsize=(8, panel_height * n_sigmas),
+        sharex=True, sharey='col'
+    )
 
     if n_sigmas == 1:
         axes = np.array([axes])
 
-    for i, sigma in enumerate(sigmas):
+    for i, sigma in enumerate(smoothing_scales):
         ax_row = axes[i]
         for trajectories in realization_trajectories:
-            # trajectories is the output of follow_multiple_smoothing
-            # It's a list of (t, xf, vmag) for each sigma
-            # I need to get the one for the current sigma
-            t, xf, vmag = trajectories[i]  # Assuming the order is the same
+            # `trajectories` is the output of `follow_multiple_smoothing`.
+            # It's a list of (t, xf, vmag) for each sigma.
+            # Get the trajectory for the current sigma
+            sigma_idx = smoothing_scales.index(sigma)
+            t, xf, vmag = trajectories[sigma_idx]
 
-            xf = xf[::10]
+            if downsample > 1:
+                xf = xf[::downsample]
 
             xf_gal = intg.to_galactic(xf, observer_location, input_frame)
 
@@ -232,24 +253,30 @@ def plot_realization_trajectories(realization_trajectories, sigmas, intg,
                 axes[j, 0].plot(r, l, 'o', color='black', markersize=5)
                 axes[j, 1].plot(r, b, 'o', color='black', markersize=5)
 
-                axes[j, 0].text(r, l + offset_y, name, color='black',
-                                ha='center', va='bottom', fontsize=8,
-                                bbox=dict(boxstyle="round,pad=0.3", fc="white",
-                                          lw=0, alpha=0.7))
-                axes[j, 1].text(r, b + offset_y, name, color='black',
-                                ha='center', va='bottom', fontsize=8,
-                                bbox=dict(boxstyle="round,pad=0.3", fc="white",
-                                          lw=0, alpha=0.7))
+                axes[j, 0].text(
+                    r, l + offset_y, name, color='black',
+                    ha='center', va='bottom', fontsize=8,
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                              lw=0, alpha=0.7)
+                )
+                axes[j, 1].text(
+                    r, b + offset_y, name, color='black',
+                    ha='center', va='bottom', fontsize=8,
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                              lw=0, alpha=0.7)
+                )
 
     for i in range(n_sigmas):
         axes[i, 0].set_ylabel(r"$\ell ~ [^\circ]$")
         axes[i, 1].set_ylabel(r"$b ~ [^\circ]$")
 
         secax = axes[i, 1].secondary_yaxis('right')
-        if sigmas[i] == 0:
+        if smoothing_scales[i] == 0:
             sigma_label = "No smoothing"
         else:
-            sigma_label = (fr"$\sigma = {sigmas[i]} h^{{-1}} \mathrm{{Mpc}}$")
+            sigma_label = (
+                fr"$\sigma = {smoothing_scales[i]} h^{{-1}} \mathrm{{Mpc}}$"
+            )
         secax.set_ylabel(sigma_label)
         secax.set_ticks([])
 
@@ -261,3 +288,126 @@ def plot_realization_trajectories(realization_trajectories, sigmas, intg,
     plt.close()
 
     return fig, axes
+
+
+def _format_sigma_key(sigma):
+    sigma_float = float(sigma)
+    if sigma_float.is_integer():
+        sigma_str = str(int(sigma_float))
+    else:
+        sigma_str = str(sigma_float).rstrip("0").rstrip(".")
+    return f"sigma_{sigma_str}"
+
+
+def plot_mw_streamlines(filepath, smoothing_scales, input_frame='icrs',
+                        downsample=10, fields=None):
+    """
+    Plots the results of the MW_streamlines.py script.
+
+    Parameters
+    ----------
+    filepath : str or pathlib.Path
+        Path to the HDF5 file with the results.
+    smoothing_scales : list of float
+        A list of smoothing scales to plot.
+    input_frame : str, optional
+        The Astropy frame of the input Cartesian coordinates.
+        Default is 'icrs'.
+    downsample : int, optional
+        Plot every nth trajectory point to reduce plotting load. Default is 10.
+    fields : array-like of int, optional
+        Only load the specified field indices (matching HDF5 groups
+        `field_<idx>`). If None, load all fields.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The matplotlib Figure object containing the plot.
+    """
+    filepath = Path(filepath)
+    if not filepath.exists():
+        raise FileNotFoundError(f"File not found: {filepath}")
+
+    smoothing_scales = np.asarray(smoothing_scales, dtype=float)
+    if fields is not None:
+        fields = np.asarray(fields, dtype=int)
+        field_names = {f"field_{int(f)}" for f in fields}
+    else:
+        field_names = None
+
+    with h5py.File(filepath, "r") as h5f:
+        available_scales = np.asarray(h5f.attrs["smoothing_scales"],
+                                      dtype=float)
+        has_match = np.isclose(
+            smoothing_scales[:, None], available_scales[None, :]
+        ).any(axis=1)
+        if not np.all(has_match):
+            missing = smoothing_scales[~has_match]
+            raise ValueError(
+                f"Invalid smoothing scales requested. "
+                f"Requested missing: {missing}. "
+                f"Available scales: {available_scales}"
+            )
+
+        realization_trajectories = []
+        box_size = None
+        ds = None
+        num_steps = int(h5f.attrs.get("num_steps", 1))
+        found_fields = set()
+        for field_key in h5f.keys():
+            if not field_key.startswith("field_"):
+                continue
+            if field_names is not None and field_key not in field_names:
+                continue
+            found_fields.add(field_key)
+
+            field_grp = h5f[field_key]
+            trajectories = []
+            for sigma in smoothing_scales:
+                sigma_key = _format_sigma_key(sigma)
+                if sigma_key not in field_grp:
+                    raise KeyError(
+                        f"{sigma_key} not found in {field_key}. "
+                        "Use available smoothing scales from file."
+                    )
+
+                sigma_grp = field_grp[sigma_key]
+                t = sigma_grp["time"][:]
+                x = sigma_grp["trajectory"][:]
+                v = sigma_grp["speed"][:]
+                trajectories.append((t, x, v))
+                if box_size is None:
+                    box_size = float(sigma_grp.attrs["box_size"])
+                if ds is None:
+                    ds = float(sigma_grp.attrs.get("ds", 1.0))
+            realization_trajectories.append(trajectories)
+
+    if field_names is not None:
+        missing_fields = field_names - found_fields
+        if missing_fields:
+            raise KeyError(
+                f"Requested fields not found: {sorted(missing_fields)}")
+
+    if box_size is None:
+        raise ValueError("No trajectories found in the provided file.")
+    if ds is None:
+        ds = 1.0
+
+    smoothing_scales_list = smoothing_scales.tolist()
+
+    # Mock a TrajectoryFollower instance to use the to_galactic method
+    # A dummy velocity field is sufficient.
+    dummy_velocity_field = np.zeros((3, 2, 2, 2))
+    intg = flowi.TrajectoryFollower(
+        dummy_velocity_field, box_size, num_steps=num_steps, ds=ds
+    )
+    observer_location = np.full(3, box_size / 2)
+
+    return plot_realization_trajectories(
+        realization_trajectories,
+        smoothing_scales_list,
+        intg,
+        observer_location,
+        input_frame,
+        downsample=downsample,
+    )
