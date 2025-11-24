@@ -481,7 +481,7 @@ def plot_ga_positions(filepaths, box_size, r_min=None):
             parts = path.stem.split("sigma_")
             if len(parts) > 1:
                 try:
-                    label = f"$\\sigma={float(parts[-1])}$"
+                    label = f"$\\sigma={float(parts[-1])}\\ h^{{-1}}\\ \\mathrm{{Mpc}}$"
                 except ValueError:
                     label = path.stem
             else:
@@ -508,7 +508,7 @@ def plot_ga_positions(filepaths, box_size, r_min=None):
             )
 
         axes[0].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
-        axes[0].set_ylabel("Count")
+        axes[0].set_ylabel("Counts per bin")
         axes[0].legend()
 
         axes[1].set_xlabel(r"$\ell ~ [^\circ]$")
