@@ -29,6 +29,31 @@ def load_manticore_velocity(base_folder, simulation_number):
     return loader.load_velocity_field(), loader.boxsize
 
 
+def trim_on_static_voxel(t, x, v, box_size, resolution, max_static_steps=200):
+    """
+    Trim trajectory once the voxel index stays constant for
+    `max_static_steps` or more consecutive steps.
+    """
+    n = len(x)
+    if n == 0:
+        return t, x, v
+
+    voxel_size = box_size / resolution
+    idx = (np.floor(x / voxel_size).astype(int)) % resolution
+    if len(idx) < 2:
+        return t, x, v
+
+    same = np.all(idx[1:] == idx[:-1], axis=1)
+    change_points = np.concatenate(([0], np.flatnonzero(~same) + 1, [n]))
+    run_lengths = np.diff(change_points)
+
+    for start, length in zip(change_points[:-1], run_lengths):
+        if length >= max_static_steps:
+            cutoff = min(start + max_static_steps, n)
+            return t[:cutoff], x[:cutoff], v[:cutoff]
+    return t, x, v
+
+
 def main():
     print(f"JAX backend: {jax.default_backend()}")
     print(f"JAX devices: {jax.devices()}")
@@ -38,6 +63,7 @@ def main():
     ds_factor = 0.05
     smoothing_scales = np.arange(0, 17)  # Mpc/h
     output = results_root / "MW_streamlines.hdf5"
+    max_static_steps = 200  # steps in same voxel before trimming
 
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -67,11 +93,16 @@ def main():
             for sigma, res in zip(smoothing_scales, results):
                 t_s, x_s, v_s = (np.array(res[0]), np.array(res[1]),
                                  np.array(res[2]))
+                t_s, x_s, v_s = trim_on_static_voxel(
+                    t_s, x_s, v_s, box_size, resolution,
+                    max_static_steps=max_static_steps
+                )
                 s_grp = field_grp.create_group(f"sigma_{sigma}")
                 s_grp.attrs["sigma"] = sigma
                 s_grp.attrs["box_size"] = box_size
                 s_grp.attrs["grid_resolution"] = resolution
                 s_grp.attrs["ds"] = ds
+                s_grp.attrs["max_static_steps"] = max_static_steps
                 s_grp.create_dataset("time", data=t_s, compression="gzip")
                 s_grp.create_dataset("trajectory", data=x_s,
                                      compression="gzip")
