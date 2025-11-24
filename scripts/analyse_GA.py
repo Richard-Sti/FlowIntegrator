@@ -14,10 +14,12 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Analyse Great Attractor volume from voxel clustering outputs."""
 
-import flowi
+from pathlib import Path
+
 import numpy as np
 from h5py import File
 
+import flowi
 from config import data_root, results_root
 
 
@@ -81,6 +83,46 @@ def pick_ga_index(centroids, target, tol):
     return best, dists[best]
 
 
+def _ga_position_path(base_dir, sigma):
+    """Return path to GA positions file for a given sigma, if it exists."""
+    base_dir = Path(base_dir)
+    s = float(sigma)
+    candidates = [
+        f"{sigma}",
+        f"{s:g}",
+        f"{s:.1f}",
+    ]
+    seen = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        path = base_dir / f"ga_positions_sigma_{cand}.txt"
+        if path.exists():
+            return path
+    if np.isclose(s, 0.0):
+        fallback = base_dir / "ga_positions.txt"
+        if fallback.exists():
+            return fallback
+    return None
+
+
+def load_ga_positions(base_dir, sigma_values):
+    """Load GA positions per sigma into a dict of dicts."""
+    ga_pos = {}
+    for sigma in sigma_values:
+        path = _ga_position_path(base_dir, sigma)
+        if path is None:
+            ga_pos[sigma] = None
+            continue
+        data = np.loadtxt(path)
+        if data.ndim == 1:
+            data = data[None, :]
+        mapping = {int(row[0]): row[1:4].astype(float) for row in data}
+        ga_pos[sigma] = mapping
+    return ga_pos
+
+
 def ga_mass_from_members(members, density, voxel_volume_kpc3):
     """
     Compute GA mass (Msun/h) by summing density over member voxels.
@@ -98,7 +140,8 @@ def ga_mass_from_members(members, density, voxel_volume_kpc3):
 
 
 def analyse_sigma(
-    sigma_grp, ga_pos, ga_tolerance, voxel_volume_mpc3, density
+    sigma_grp, ga_pos, ga_tolerance, ga_fiducial,
+    voxel_volume_mpc3, density
 ):
     """Analyse GA volume and mass for a given sigma group."""
     centroids = sigma_grp["centroids"][()]
@@ -108,6 +151,17 @@ def analyse_sigma(
     idx, dist = pick_ga_index(centroids, ga_pos, ga_tolerance)
     if idx is None:
         return {"matched": False}
+
+    centroid = centroids[idx]
+    dist_fid = float(np.linalg.norm(centroid - ga_fiducial))
+    if dist_fid > ga_tolerance:
+        return {
+            "matched": False,
+            "ga_distance_fiducial": dist_fid,
+            "centroid": centroid,
+            "ga_position": ga_pos,
+            "too_far_fiducial": True,
+        }
 
     # Members correspond to particle indices; with full grid it is one per
     # voxel
@@ -122,13 +176,14 @@ def analyse_sigma(
         "matched": True,
         "index": int(idx),
         "distance": float(dist),
-        "centroid": centroids[idx],
+        "centroid": centroid,
         "member_count": int(counts[idx]),
         "voxel_count": int(n_voxels_ga),
         "voxel_volume": float(voxel_volume_mpc3),
         "voxel_volume_kpc3": float(voxel_volume_kpc3),
         "ga_volume": float(ga_volume),
         "ga_mass": ga_mass,
+        "ga_distance_fiducial": dist_fid,
     }
 
 
@@ -137,7 +192,7 @@ def main():
     result_file = results_root / "manticore_voxel_clusters.hdf5"
     output_file = results_root / "GA_analysis.hdf5"
 
-    ga_position = np.array([310.20243187, 327.82457008, 317.06044731])
+    ga_fiducial = np.array([310.20243187, 327.82457008, 317.06044731])
     ga_tolerance = 10.0  # Mpc / h
 
     with File(result_file, "r") as src, File(output_file, "w") as dst:
@@ -147,9 +202,10 @@ def main():
             src.attrs["smoothing_scales"], dtype=float
         )
         fields = list_fields(src)
+        ga_positions = load_ga_positions(results_root, smoothing_scales)
 
         dst.attrs["source"] = str(result_file)
-        dst.attrs["ga_position"] = ga_position
+        dst.attrs["ga_position_fiducial"] = ga_fiducial
         dst.attrs["ga_tolerance"] = ga_tolerance
         dst.attrs["smoothing_scales"] = smoothing_scales
 
@@ -175,6 +231,28 @@ def main():
             )
 
             for sigma in smoothing_scales:
+                # Fetch GA position for this sigma/field from streamlines.
+                pos_map = ga_positions.get(sigma, None)
+                if pos_map is None:
+                    sigma_out = field_out.create_group(f"sigma_{sigma}")
+                    sigma_out.attrs["matched"] = False
+                    sigma_out.attrs["missing_ga_position"] = True
+                    continue
+                if field_id not in pos_map:
+                    sigma_out = field_out.create_group(f"sigma_{sigma}")
+                    sigma_out.attrs["matched"] = False
+                    sigma_out.attrs["missing_ga_position"] = True
+                    continue
+                ga_position = np.asarray(pos_map[field_id], dtype=float)
+                dist_fid = float(np.linalg.norm(ga_position - ga_fiducial))
+                if dist_fid > ga_tolerance:
+                    sigma_out = field_out.create_group(f"sigma_{sigma}")
+                    sigma_out.attrs["matched"] = False
+                    sigma_out.attrs["ga_position"] = ga_position
+                    sigma_out.attrs["ga_distance_fiducial"] = dist_fid
+                    sigma_out.attrs["skipped_far"] = True
+                    continue
+
                 try:
                     _, sigma_grp_src = load_sigma_group(
                         src, field_id, sigma, result_file
@@ -196,6 +274,7 @@ def main():
                     sigma_grp_src,
                     ga_pos=ga_position,
                     ga_tolerance=ga_tolerance,
+                    ga_fiducial=ga_fiducial,
                     voxel_volume_mpc3=voxel_volume_mpc3,
                     density=density_sigma
                 )
@@ -204,6 +283,18 @@ def main():
                 sigma_out.attrs["matched"] = res["matched"]
                 sigma_out.attrs["sigma"] = sigma
                 if not res["matched"]:
+                    if "ga_distance_fiducial" in res:
+                        sigma_out.attrs["ga_distance_fiducial"] = res[
+                            "ga_distance_fiducial"
+                        ]
+                    if "centroid" in res:
+                        sigma_out.create_dataset(
+                            "centroid", data=res["centroid"])
+                    if "ga_position" in res:
+                        sigma_out.create_dataset(
+                            "ga_position", data=res["ga_position"])
+                    if res.get("too_far_fiducial", False):
+                        sigma_out.attrs["skipped_far"] = True
                     continue
 
                 sigma_out.attrs["index"] = res["index"]
@@ -214,13 +305,17 @@ def main():
                 sigma_out.attrs["voxel_volume_kpc3"] = res["voxel_volume_kpc3"]
                 sigma_out.attrs["ga_volume"] = res["ga_volume"]
                 sigma_out.attrs["ga_mass"] = res["ga_mass"]
+                sigma_out.attrs["ga_distance_fiducial"] = dist_fid
                 sigma_out.create_dataset("centroid", data=res["centroid"])
+                sigma_out.create_dataset("ga_position", data=ga_position)
 
                 print(
                     f"field {field_id}, sigma {sigma}: "
                     f"GA volume {res['ga_volume']:.6e}, "
                     f"mass {res['ga_mass']:.6e} (matched)"
                 )
+
+        print(f"GA analysis written to {output_file}")
 
 
 if __name__ == "__main__":
