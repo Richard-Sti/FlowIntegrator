@@ -523,8 +523,8 @@ class TrajectoryFollower:
         jax.Array
             A 2D JAX array of shape (num_steps, 3), where each row contains
             the distance, Galactic longitude (l), and Galactic latitude (b)
-            for each trajectory step. Units are Mpc for distance and degrees
-            for l and b.
+        for each trajectory step. Units are Mpc for distance and degrees
+        for l and b.
         """
         if (not isinstance(observer_location, np.ndarray) or
                 observer_location.shape != (3,)):
@@ -532,32 +532,23 @@ class TrajectoryFollower:
                 "observer_location must be a numpy array of shape (3,)"
             )
 
-        galactic_coords_data = []
-        for step_position in trajectory:
-            # Convert JAX array to NumPy array for Astropy
-            step_position_np = np.array(step_position) * u.Mpc
+        traj_np = np.asarray(trajectory)
+        if traj_np.ndim != 2 or traj_np.shape[1] != 3:
+            raise ValueError("trajectory must have shape (N, 3)")
 
-            # The vector from observer to step_position is:
-            relative_position = step_position_np - observer_location * u.Mpc
+        rel = traj_np - observer_location
+        cart = CartesianRepresentation(
+            x=rel[:, 0] * u.Mpc,
+            y=rel[:, 1] * u.Mpc,
+            z=rel[:, 2] * u.Mpc
+        )
+        sky = SkyCoord(cart, frame=input_frame)
+        gal = sky.galactic
 
-            cartesian_representation = CartesianRepresentation(
-                x=relative_position[0],
-                y=relative_position[1],
-                z=relative_position[2],
-                unit=u.Mpc
-            )
-
-            # Create a SkyCoord object in the specified input_frame
-            sky_coord = SkyCoord(cartesian_representation, frame=input_frame)
-
-            # Transform to Galactic coordinates
-            galactic_coord = sky_coord.galactic
-            galactic_coords_data.append([
-                galactic_coord.distance.value,
-                galactic_coord.l.value,
-                galactic_coord.b.value
-            ])
-        return jnp.array(galactic_coords_data)
+        gal_stack = np.stack(
+            (gal.distance.value, gal.l.value, gal.b.value), axis=1
+        )
+        return jnp.array(gal_stack)
 
     def follow_multiple_smoothing(self, initial_position, smoothing_scales,
                                   verbose=True):
