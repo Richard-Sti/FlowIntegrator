@@ -203,7 +203,8 @@ def plot_realization_trajectories(realization_trajectories,
     plot_attractors : bool, optional
         If True, plot the positions of attractors. Default is True.
     downsample : int, optional
-        Plot every nth trajectory point to reduce plotting load. Default is 10.
+        Plot every nth trajectory point to reduce plotting load. If None,
+        no downsampling is applied. Default is 10.
 
     Returns
     -------
@@ -228,7 +229,7 @@ def plot_realization_trajectories(realization_trajectories,
             sigma_idx = smoothing_scales.index(sigma)
             t, xf, vmag = trajectories[sigma_idx]
 
-            if downsample > 1:
+            if downsample is not None and downsample > 1:
                 xf = xf[::downsample]
 
             xf_gal = intg.to_galactic(xf, observer_location, input_frame)
@@ -243,7 +244,7 @@ def plot_realization_trajectories(realization_trajectories,
     if plot_attractors:
         attractors = {
             'Virgo': (12, 284, 74),
-            'Great Attractor': (49, 325, -7),
+            'Great Attractor': (49, 308, 29),
             'Shapley': (138, 312.5, 30.3)
         }
         offset_y = 5
@@ -314,7 +315,8 @@ def plot_mw_streamlines(filepath, smoothing_scales, input_frame='icrs',
         The Astropy frame of the input Cartesian coordinates.
         Default is 'icrs'.
     downsample : int, optional
-        Plot every nth trajectory point to reduce plotting load. Default is 10.
+        Plot every nth trajectory point to reduce plotting load. If None,
+        no downsampling is applied. Default is 10.
     fields : array-like of int, optional
         Only load the specified field indices (matching HDF5 groups
         `field_<idx>`). If None, load all fields.
@@ -329,6 +331,12 @@ def plot_mw_streamlines(filepath, smoothing_scales, input_frame='icrs',
         raise FileNotFoundError(f"File not found: {filepath}")
 
     smoothing_scales = np.asarray(smoothing_scales, dtype=float)
+    if downsample is None:
+        downsample = 1
+    else:
+        downsample = int(downsample)
+        if downsample < 1:
+            raise ValueError("downsample must be >= 1")
     if fields is not None:
         fields = np.asarray(fields, dtype=int)
         field_names = {f"field_{int(f)}" for f in fields}
@@ -372,9 +380,9 @@ def plot_mw_streamlines(filepath, smoothing_scales, input_frame='icrs',
                     )
 
                 sigma_grp = field_grp[sigma_key]
-                t = sigma_grp["time"][:]
-                x = sigma_grp["trajectory"][:]
-                v = sigma_grp["speed"][:]
+                t = sigma_grp["time"][::downsample]
+                x = sigma_grp["trajectory"][::downsample]
+                v = sigma_grp["speed"][::downsample]
                 trajectories.append((t, x, v))
                 if box_size is None:
                     box_size = float(sigma_grp.attrs["box_size"])
@@ -402,6 +410,8 @@ def plot_mw_streamlines(filepath, smoothing_scales, input_frame='icrs',
         dummy_velocity_field, box_size, num_steps=num_steps, ds=ds
     )
     observer_location = np.full(3, box_size / 2)
+
+    print("going to plot")
 
     return plot_realization_trajectories(
         realization_trajectories,
