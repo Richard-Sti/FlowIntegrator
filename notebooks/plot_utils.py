@@ -16,6 +16,7 @@
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
+import scienceplots  # noqa
 from pathlib import Path
 
 import flowi
@@ -411,8 +412,6 @@ def plot_mw_streamlines(filepath, smoothing_scales, input_frame='icrs',
     )
     observer_location = np.full(3, box_size / 2)
 
-    print("going to plot")
-
     return plot_realization_trajectories(
         realization_trajectories,
         smoothing_scales_list,
@@ -421,3 +420,103 @@ def plot_mw_streamlines(filepath, smoothing_scales, input_frame='icrs',
         input_frame,
         downsample=downsample,
     )
+
+
+def plot_ga_positions(filepaths, box_size, r_min=None):
+    """
+    Plot GA positions (r, ell, b) from a text file of endpoints.
+
+    Parameters
+    ----------
+    filepaths : str, pathlib.Path, or sequence
+        One or more text files produced by `find_ga_from_streamlines.py`
+        containing columns [field] x y z (or x y z).
+    box_size : float
+        Simulation box size (h^-1 Mpc). Observer is assumed at box_size / 2.
+    r_min : float, optional
+        If provided, only plot entries with r > r_min.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The matplotlib Figure object containing the plot.
+    """
+    if not isinstance(filepaths, (list, tuple, np.ndarray)):
+        filepaths = [filepaths]
+
+    datasets = []
+    for fp in filepaths:
+        path = Path(fp)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+
+        data = np.loadtxt(path)
+        if data.ndim == 1:
+            data = data[None, :]
+        if data.shape[1] >= 4:
+            positions = data[:, 1:4]
+        elif data.shape[1] == 3:
+            positions = data
+        else:
+            raise ValueError(
+                "Text input must have columns [field] x y z or x y z"
+            )
+        datasets.append((path, positions))
+
+    center = np.full(3, box_size / 2)
+
+    with plt.style.context("science"):
+        fig, axes = plt.subplots(1, 3, figsize=(9, 3), sharey=True)
+        colors = plt.cm.tab10.colors
+
+        for i, (path, positions) in enumerate(datasets):
+            r, ell, b = flowi.cartesian_icrs_to_galactic_spherical(
+                positions, center
+            )
+            if r_min is not None:
+                m = r > r_min
+                r, ell, b = r[m], ell[m], b[m]
+
+            # Try to parse sigma from filename suffix: ..._sigma_<val>.txt
+            parts = path.stem.split("sigma_")
+            if len(parts) > 1:
+                try:
+                    label = f"$\\sigma={float(parts[-1])}$"
+                except ValueError:
+                    label = path.stem
+            else:
+                label = path.stem
+
+            color = colors[i % len(colors)]
+            kwargs = dict(bins="auto", color=color, histtype='stepfilled',
+                          alpha=0.5)
+            axes[0].hist(r, **kwargs, label=label)
+            axes[1].hist(ell, **kwargs)
+            axes[2].hist(b, **kwargs)
+
+            p16_r, med_r, p84_r = np.percentile(r, [16, 50, 84])
+            p16_l, med_l, p84_l = np.percentile(ell, [16, 50, 84])
+            p16_b, med_b, p84_b = np.percentile(b, [16, 50, 84])
+            err_r_minus, err_r_plus = med_r - p16_r, p84_r - med_r
+            err_l_minus, err_l_plus = med_l - p16_l, p84_l - med_l
+            err_b_minus, err_b_plus = med_b - p16_b, p84_b - med_b
+            print(
+                f"{label}: "
+                f"r = {med_r:.3g} -{err_r_minus:.3g}/+{err_r_plus:.3g}; "
+                f"ell = {med_l:.3g} -{err_l_minus:.3g}/+{err_l_plus:.3g}; "
+                f"b = {med_b:.3g} -{err_b_minus:.3g}/+{err_b_plus:.3g}"
+            )
+
+        axes[0].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
+        axes[0].set_ylabel("Count")
+        axes[0].legend()
+
+        axes[1].set_xlabel(r"$\ell ~ [^\circ]$")
+        axes[1].set_ylabel("")
+
+        axes[2].set_xlabel(r"$b ~ [^\circ]$")
+        axes[2].set_ylabel("")
+
+        fig.tight_layout()
+        plt.close()
+        return fig, axes
