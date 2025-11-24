@@ -12,7 +12,7 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-"""Compute GA enclosed mass profiles from GA centroids."""
+"""Compute GA enclosed mass profiles using a fixed GA position."""
 
 import flowi
 import numpy as np
@@ -22,34 +22,24 @@ from config import data_root, results_root
 
 
 def main():
-    ga_file = results_root / "GA_analysis.hdf5"
     output_file = results_root / "GA_enclosed_mass.hdf5"
 
     sigma_target = 0.0
-    radii = np.linspace(5.0, 50.0, 100)  # Mpc / h
+    radii = np.linspace(5.0, 100.0, 100)  # Mpc / h
     n_rand = 1000
     rng_seed = 42
+    ga_center = np.array([310.20243187, 327.82457008, 317.06044731])
+    n_fields = 80  # number of fields to process
+    n_rand_fields = 10  # only compute random profiles for first N fields
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with File(ga_file, "r") as gaf, File(output_file, "w") as out:
+    with File(output_file, "w") as out:
         out.attrs["sigma_target"] = sigma_target
+        out.attrs["ga_center"] = ga_center
         out.create_dataset("radii", data=radii)
 
-        fields = [k for k in gaf.keys() if k.startswith("field_")]
-
-        for field_name in fields:
-            field_id = int(field_name.split("_")[1])
-            field_ga = gaf[field_name]
-
-            sigma_key = f"sigma_{sigma_target}"
-            if sigma_key not in field_ga:
-                continue
-            if not field_ga[sigma_key].attrs.get("matched", False):
-                continue
-
-            centroid = field_ga[sigma_key]["centroid"][()]
-
+        for field_id in range(n_fields):
             loader = flowi.ManticoreLoader(data_root, field_id)
             density = loader.load_density_field()
 
@@ -62,19 +52,24 @@ def main():
                 loader.boxsize, loader.resolution
             )
             m_enclosed = integrator.integrated_density_single(
-                density, centroid, radii
+                density, ga_center, radii
             )
-            m_rand = integrator.integrated_density_random_points(
-                density, radii, num_points=n_rand, seed=rng_seed
-            )
+            m_rand = None
+            if field_id < n_rand_fields:
+                m_rand = integrator.integrated_density_random_points(
+                    density, radii, num_points=n_rand, seed=rng_seed
+                )
 
-            grp = out.create_group(field_name)
+            grp = out.create_group(f"field_{field_id}")
             grp.attrs["sigma"] = sigma_target
-            grp.attrs["centroid_x"] = float(centroid[0])
-            grp.attrs["centroid_y"] = float(centroid[1])
-            grp.attrs["centroid_z"] = float(centroid[2])
+            grp.attrs["centroid_x"] = float(ga_center[0])
+            grp.attrs["centroid_y"] = float(ga_center[1])
+            grp.attrs["centroid_z"] = float(ga_center[2])
             grp.create_dataset("mass_enclosed", data=m_enclosed)
-            grp.create_dataset("mass_random", data=m_rand)
+            if m_rand is not None:
+                grp.create_dataset("mass_random", data=m_rand)
+
+    print(f"Wrote enclosed masses to {output_file}")
 
 
 if __name__ == "__main__":
