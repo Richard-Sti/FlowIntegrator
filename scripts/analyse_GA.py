@@ -137,7 +137,7 @@ def main():
     result_file = results_root / "manticore_voxel_clusters.hdf5"
     output_file = results_root / "GA_analysis.hdf5"
 
-    ga_position = np.array([340.0, 340.0, 340.0])  # Mpc / h
+    ga_position = np.array([310.20243187, 327.82457008, 317.06044731])
     ga_tolerance = 10.0  # Mpc / h
 
     with File(result_file, "r") as src, File(output_file, "w") as dst:
