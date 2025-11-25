@@ -201,7 +201,8 @@ def save_projection(proj, labels, outfile, half_width,
         plt.close(fig)
 
 
-def plot_ga_sky_map(positions, center, outfile, weights=None, nside=32):
+def plot_ga_sky_map(positions, center, outfile, weights=None, nside=32,
+                    max_distance=None):
     """
     Plot a HEALPix sky map of GA member positions in Galactic coords.
 
@@ -217,9 +218,19 @@ def plot_ga_sky_map(positions, center, outfile, weights=None, nside=32):
         Weights per position (e.g., masses). If None, use unity.
     nside : int, optional
         HEALPix nside.
+    max_distance : float, optional
+        Maximum distance from center to include. If None, include all.
     """
     weights = np.ones(positions.shape[0], dtype=float) if weights is None else np.asarray(weights, dtype=float)  # noqa
     r, ell, b = flowi.cartesian_icrs_to_galactic_spherical(positions, center)
+
+    if max_distance is not None:
+        mask = r <= max_distance
+        r = r[mask]
+        ell = ell[mask]
+        b = b[mask]
+        weights = weights[mask]
+
     theta = np.deg2rad(90.0 - b)
     phi = np.deg2rad(ell % 360.0)
     pix = hp.ang2pix(nside, theta, phi)
@@ -229,8 +240,10 @@ def plot_ga_sky_map(positions, center, outfile, weights=None, nside=32):
     m = np.divide(
         wsum, cnt, out=np.full_like(wsum, np.nan, dtype=float), where=cnt > 0)
     with plt.style.context("science"):
-        hp.mollview(m, title="", unit="mean weight", cbar=True)
-        plt.savefig(outfile, dpi=300, bbox_inches="tight")
+        hp.mollview(
+            m, title="", unit=r"$\langle M \\rangle\ [h^2\,M_\\odot]$",
+            cbar=True)
+        plt.savefig(outfile, dpi=450, bbox_inches="tight")
         plt.close()
 
 
@@ -348,12 +361,6 @@ def main():
         ga_center=(center[0] - box_center[0], center[1] - box_center[1])
     )
 
-    # Sky map of stacked positions in Galactic coordinates
-    sky_out = out_dir / f"GA_sky_sigma{center_sigma:.1f}.png"
-    plot_ga_sky_map(
-        stacked_positions, box_center, sky_out,
-        weights=None, nside=16
-    )
     # Sky map of mean density within spherical cut about observer
     if resolution is None:
         resolution = cube_mean.shape[0]
@@ -367,16 +374,14 @@ def main():
             (iyg + 0.5) * voxel,
             (izg + 0.5) * voxel,
         ],
-        axis=-1
-    ).reshape(-1, 3)
-    weights_cube = cube_mean.ravel()
-    obs = box_center
-    dists = np.sqrt(((pos_cube - obs) ** 2).sum(axis=1))
-    mask_sphere = dists <= half_width
+        axis=-1).reshape(-1, 3)
+
+    voxel_volume = voxel**3
+    mass_cube = cube_mean.ravel() * voxel_volume
     sky_density_out = out_dir / f"GA_sky_density_sigma{center_sigma:.1f}.png"
     plot_ga_sky_map(
-        pos_cube[mask_sphere], obs, sky_density_out,
-        weights=weights_cube[mask_sphere], nside=32
+        pos_cube, box_center, sky_density_out,
+        weights=mass_cube, nside=16, max_distance=100
     )
     print(f"Used {n_used} realizations.")
     print(f"Median centroid (Mpc/h): {center}")
