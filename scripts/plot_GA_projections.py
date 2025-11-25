@@ -172,7 +172,7 @@ def save_projection(proj, labels, outfile, half_width,
             proj.T,
             origin="lower",
             extent=extent,
-            cmap="viridis",
+            cmap="inferno",
             interpolation="nearest",
         )
         xlab = fr"${labels[0]} ~ [h^{{-1}}\,\mathrm{{Mpc}}]$"
@@ -185,10 +185,10 @@ def save_projection(proj, labels, outfile, half_width,
                 s=2, c="red", alpha=0.3, linewidths=0
             )
         if observer is not None:
-            ax.plot(observer[0], observer[1], "kx", ms=4, alpha=0.8,
+            ax.plot(observer[0], observer[1], "kx", ms=1, alpha=0.8,
                     label="Observer")
         if ga_center is not None:
-            ax.plot(ga_center[0], ga_center[1], "rx", ms=4, alpha=0.8,
+            ax.plot(ga_center[0], ga_center[1], "rx", ms=1, alpha=0.8,
                     label="GA center")
         if contour_data is not None and contour_level is not None:
             ax.contour(
@@ -218,9 +218,8 @@ def save_projection(proj, labels, outfile, half_width,
                 cluster_pos[:, [idx_x, idx_y]] - box_center[[idx_x, idx_y]])
 
             # Plot markers
-            ax.scatter(cluster_2d[:, 0], cluster_2d[:, 1], s=50, c='cyan',
-                       edgecolors='black', linewidths=1.5, marker='o',
-                       zorder=10)
+            ax.scatter(cluster_2d[:, 0], cluster_2d[:, 1], s=7.5, c='cyan',
+                       marker='o', zorder=10, linewidths=0)
 
             # Add labels
             for i, name in enumerate(cluster_names):
@@ -229,8 +228,8 @@ def save_projection(proj, labels, outfile, half_width,
                 else:
                     short_name = name.split()[0]
                 ax.text(cluster_2d[i, 0] + 2, cluster_2d[i, 1] + 2, short_name,
-                        fontsize=8, color='black', ha='left', va='bottom',
-                        weight='bold')
+                        fontsize='xx-small', color='white', ha='left',
+                        va='bottom', weight='bold')
 
         cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.0)
         cbar.set_label(r"$\rho\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$")
@@ -491,7 +490,7 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
                 scatter_positions, scatter_center)
             theta_s = np.deg2rad(90.0 - b_s)
             phi_s = np.deg2rad(ell_s % 360.0)
-            hp.projscatter(theta_s, phi_s, lonlat=False, s=1, c='red',
+            hp.projscatter(theta_s, phi_s, lonlat=False, s=7.5, c='red',
                            alpha=0.3, linewidths=0)
 
         if highlight_gal is not None:
