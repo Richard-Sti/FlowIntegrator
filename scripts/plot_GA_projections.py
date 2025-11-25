@@ -12,257 +12,138 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-"""Plot GA projections in supergalactic and Galactic coordinates."""
+"""Minimal GA projection script."""
+
+from shutil import rmtree
 
 import flowi
-import healpy as hp
 import matplotlib.pyplot as plt
 import numpy as np
+import scienceplots  # noqa
 from h5py import File
 
 from config import data_root, results_root
 
 
-def voxel_indices(center, width, box_size, resolution):
-    """Return wrapped voxel indices around center for a given width."""
-    voxel_size = box_size / resolution
-    half = int(np.ceil(0.5 * width / voxel_size))
-    ctr_idx = np.mod(
-        (center / box_size * resolution).astype(int), resolution
-    )
-    rng = np.arange(-half, half + 1)
-    idx = np.mod(ctr_idx[:, None] + rng[None, :], resolution).astype(int)
-    return idx
+def matched_centers(ga_file, sigma):
+    centers = []
+    box_sizes = []
+    field_ids = []
+    with File(ga_file, "r") as h5f:
+        for name in sorted(k for k in h5f if k.startswith("field_")):
+            grp = h5f[name]
+            key = f"sigma_{sigma}"
+            if key not in grp:
+                continue
+            sg = grp[key]
+            if not sg.attrs.get("matched", False):
+                continue
+            centers.append(sg["centroid"][()])
+            box_sizes.append(float(grp.attrs["box_size"]))
+            field_ids.append(int(name.split("_")[1]))
+    if not centers:
+        raise RuntimeError(f"No matched GA entries for sigma={sigma}")
+    centers = np.vstack(centers)
+    box_size = float(np.median(box_sizes))
+    center = np.median(centers, axis=0)
+    print(f"Found {centers.shape[0]} matched centroids; median={center}")
+    return center, field_ids, box_size
 
 
-def project_density(density, box_size, center, width, axis):
-    """Project density along one axis within a finite slab."""
+def cube_indices(center, half_width, box_size, resolution):
+    voxel = box_size / resolution
+    half_n = int(np.ceil(half_width / voxel))
+    ctr = np.mod((center / box_size * resolution).astype(int), resolution)
+    rng = np.arange(-half_n, half_n + 1)
+    return (ctr[:, None] + rng[None, :]) % resolution
+
+
+def extract_cube(density, center, half_width, box_size):
     res = density.shape[0]
-    idx = voxel_indices(center, width, box_size, res)
-    voxel_size = box_size / res
-    extent_sym = [
-        -0.5 * voxel_size * (idx.shape[1] - 1),
-        0.5 * voxel_size * (idx.shape[1] - 1),
-        -0.5 * voxel_size * (idx.shape[1] - 1),
-        0.5 * voxel_size * (idx.shape[1] - 1),
-    ]
-    if axis == 0:
-        sub = density[idx[0], :, :]
-        return sub.sum(axis=0), extent_sym
-    elif axis == 1:
-        sub = density[:, idx[1], :]
-        return sub.sum(axis=1), extent_sym
-    elif axis == 2:
-        sub = density[:, :, idx[2]]
-        return sub.sum(axis=2), extent_sym
-    raise ValueError("axis must be 0, 1, or 2")
+    idx = cube_indices(center, half_width, box_size, res)
+    return density[np.ix_(idx[0], idx[1], idx[2])]
 
 
-def members_to_positions(members, box_size, resolution):
-    """Convert flat voxel indices to Cartesian positions."""
-    idx = np.asarray(members, dtype=int)
-    ix = idx // (resolution * resolution)
-    rem = idx % (resolution * resolution)
-    iy = rem // resolution
-    iz = rem % resolution
-    voxel_size = box_size / resolution
-    pos = np.stack(
-        [
-            (ix + 0.5) * voxel_size,
-            (iy + 0.5) * voxel_size,
-            (iz + 0.5) * voxel_size,
-        ],
-        axis=-1,
+def project_cube(cube):
+    # Integrate over x, y, z respectively
+    return (
+        cube.mean(axis=0),  # y-z
+        cube.mean(axis=1),  # x-z
+        cube.mean(axis=2),  # x-y
     )
-    return pos, (ix, iy, iz)
 
 
-def voxel_masses(ix, iy, iz, density, voxel_volume):
-    """Mass per voxel given indices."""
-    return density[ix, iy, iz] * voxel_volume
-
-
-def plot_projection(img, extent, labels, outfile):
-    """Save a 2D projection image."""
+def save_projection(proj, labels, outfile, half_width):
+    extent = (-half_width, half_width, -half_width, half_width)
     with plt.style.context("science"):
         fig, ax = plt.subplots()
-        ax.imshow(
-            img.T,
+        im = ax.imshow(
+            proj.T,
             origin="lower",
             extent=extent,
             cmap="viridis",
             interpolation="nearest",
         )
-        ax.set_xlabel(f"{labels[0]} [Mpc/h]")
-        ax.set_ylabel(f"{labels[1]} [Mpc/h]")
+        xlab = fr"$\mathrm{{{labels[0]}}} ~ [h^{{-1}}\,\mathrm{{Mpc}}]$"
+        ylab = fr"$\mathrm{{{labels[1]}}} ~ [h^{{-1}}\,\mathrm{{Mpc}}]$"
+        ax.set_xlabel(xlab)
+        ax.set_ylabel(ylab)
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.0)
+        cbar.set_label(r"$\rho\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$")
         fig.tight_layout()
-        fig.savefig(outfile, dpi=200)
+        fig.savefig(outfile, dpi=450)
         plt.close(fig)
 
 
-def plot_healpy_mass(l_deg, b_deg, mass, nside, outfile):
-    """Save a HEALPix mass map."""
-    theta = np.deg2rad(90.0 - b_deg)
-    phi = np.deg2rad(l_deg % 360.0)
-    pix = hp.ang2pix(nside, theta, phi)
-    npix = hp.nside2npix(nside)
-    hmap = np.bincount(pix, weights=mass, minlength=npix)
-    with plt.style.context("science"):
-        hp.mollview(hmap, unit="Msun/h", title="", cbar=True)
-        plt.savefig(outfile, dpi=200, bbox_inches="tight")
-        plt.close()
-    return hmap
-
-
 def main():
-    ga_file = results_root / "GA_analysis.hdf5"
-    cluster_file = results_root / "manticore_voxel_clusters.hdf5"
+    center_sigma = 4.0
+    plot_sigma = 1.0
+    half_width = 50.0
     out_dir = results_root / "GA_plots"
 
-    slab_width = 50.0  # Mpc / h
-    nside = 64
-    sigma_target = 0.0
-
+    ga_file = results_root / "GA_analysis.hdf5"
+    if out_dir.exists():
+        print(f"Cleaning output directory {out_dir}")
+        rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    with File(ga_file, "r") as gaf, File(cluster_file, "r") as clf:
-        fields = [k for k in gaf.keys() if k.startswith("field_")]
-        sum_x = sum_y = sum_z = None
-        hmap_sum = None
-        n_used = 0
+    center, field_ids, box_size = matched_centers(ga_file, center_sigma)
+    cube_sum = None
+    n_used = 0
 
-        for field_name in fields:
-            field_id = int(field_name.split("_")[1])
-            if field_name not in clf:
-                continue
-            field_ga = gaf[field_name]
-            field_cl = clf[field_name]
+    for fid in field_ids:
+        density = flowi.ManticoreLoader(data_root, fid).load_density_field()
+        if plot_sigma > 0.0:
+            density = flowi.smooth_scalar_field_gaussian(
+                density, box_size, plot_sigma
+            )
+        cube = extract_cube(density, center, half_width, box_size)
+        if cube_sum is None:
+            cube_sum = np.zeros_like(cube, dtype=float)
+        cube_sum += cube
+        n_used += 1
 
-            box_size = float(field_ga.attrs["box_size"])
-            resolution = int(field_ga.attrs["resolution"])
-            obs = np.array(
-                [
-                    field_cl.attrs["observer_x"],
-                    field_cl.attrs["observer_y"],
-                    field_cl.attrs["observer_z"],
-                ],
-                dtype=float,
-            )
+    cube_mean = cube_sum / n_used
+    proj_yz, proj_xz, proj_xy = project_cube(cube_mean)
 
-            loader = flowi.ManticoreLoader(data_root, field_id)
-            base_density = loader.load_density_field()
-
-            sigma = sigma_target
-            sigma_key = f"sigma_{sigma}"
-            if sigma_key not in field_ga:
-                continue
-            if not field_ga[sigma_key].attrs.get("matched", False):
-                continue
-            if sigma_key not in field_cl:
-                continue
-
-            ga_idx = int(field_ga[sigma_key].attrs["index"])
-            centroid = field_ga[sigma_key]["centroid"][()]
-
-            if sigma > 0.0:
-                density = flowi.smooth_scalar_field_gaussian(
-                    base_density, box_size, sigma
-                )
-            else:
-                density = base_density
-
-            img_x, ext_x = project_density(
-                density, box_size, centroid, slab_width, axis=0
-            )
-            img_y, ext_y = project_density(
-                density, box_size, centroid, slab_width, axis=1
-            )
-            img_z, ext_z = project_density(
-                density, box_size, centroid, slab_width, axis=2
-            )
-
-            base = f"plot_field{field_id}_sigma{sigma}"
-            plot_projection(
-                img_x,
-                ext_x,
-                labels=("SGY", "SGZ"),
-                outfile=out_dir / f"{base}_sgx.png",
-            )
-            plot_projection(
-                img_y,
-                ext_y,
-                labels=("SGX", "SGZ"),
-                outfile=out_dir / f"{base}_sgy.png",
-            )
-            plot_projection(
-                img_z,
-                ext_z,
-                labels=("SGX", "SGY"),
-                outfile=out_dir / f"{base}_sgz.png",
-            )
-
-            if sum_x is None:
-                sum_x = np.zeros_like(img_x)
-                sum_y = np.zeros_like(img_y)
-                sum_z = np.zeros_like(img_z)
-
-            sum_x += img_x
-            sum_y += img_y
-            sum_z += img_z
-
-            members = field_cl[sigma_key]["members"][ga_idx]
-            pos, (ix, iy, iz) = members_to_positions(
-                members, box_size, resolution
-            )
-            voxel_volume_mpc3 = (box_size / resolution) ** 3
-            voxel_volume_kpc3 = voxel_volume_mpc3 * 1.0e9
-            mass = voxel_masses(ix, iy, iz, density, voxel_volume_kpc3)
-            r, l_deg, b_deg = flowi.cartesian_icrs_to_galactic_spherical(
-                pos, obs
-            )
-            _ = r  # unused distance
-            hmap = plot_healpy_mass(
-                l_deg, b_deg, mass, nside,
-                outfile=out_dir / f"{base}_hpmass.png"
-            )
-            if hmap_sum is None:
-                hmap_sum = np.zeros_like(hmap)
-            hmap_sum += hmap
-            n_used += 1
-
-        if n_used > 0:
-            avg_x = sum_x / n_used
-            avg_y = sum_y / n_used
-            avg_z = sum_z / n_used
-            base = f"plot_mean_sigma{sigma_target}"
-            plot_projection(
-                avg_x,
-                ext_x,
-                labels=("SGY", "SGZ"),
-                outfile=out_dir / f"{base}_sgx.png",
-            )
-            plot_projection(
-                avg_y,
-                ext_y,
-                labels=("SGX", "SGZ"),
-                outfile=out_dir / f"{base}_sgy.png",
-            )
-            plot_projection(
-                avg_z,
-                ext_z,
-                labels=("SGX", "SGY"),
-                outfile=out_dir / f"{base}_sgz.png",
-            )
-            hmap_avg = hmap_sum / n_used
-            with plt.style.context("science"):
-                hp.mollview(
-                    hmap_avg, unit="Msun/h", title="", cbar=True
-                )
-                plt.savefig(
-                    out_dir / f"{base}_hpmass.png",
-                    dpi=200, bbox_inches="tight"
-                )
-                plt.close()
+    base = out_dir / (
+        f"GA_projection_center{center_sigma:.1f}_plot{plot_sigma:.1f}"
+    )
+    save_projection(
+        proj_yz, ("SGY", "SGZ"),
+        base.with_name(f"{base.name}_yz.png"), half_width
+    )
+    save_projection(
+        proj_xz, ("SGX", "SGZ"),
+        base.with_name(f"{base.name}_xz.png"), half_width
+    )
+    save_projection(
+        proj_xy, ("SGX", "SGY"),
+        base.with_name(f"{base.name}_xy.png"), half_width
+    )
+    print(f"Used {n_used} realizations.")
+    print(f"Median centroid (Mpc/h): {center}")
+    print(f"Wrote projections to {out_dir}")
 
 
 if __name__ == "__main__":
