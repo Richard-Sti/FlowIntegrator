@@ -491,13 +491,31 @@ def main():
     phi_center = np.deg2rad(ell_center[0] % 360.0)
 
     with plt.style.context("science"):
-        hp.mollview(ga_fraction_map, title="", unit="GA presence", cbar=True,
-                    cmap="inferno")
+        hp.mollview(ga_fraction_map, title="", unit="Relative GA depth",
+                    cbar=True, cmap="inferno")
         hp.projplot(theta_center, phi_center, 'o', markersize=8,
                     markerfacecolor='white', markeredgecolor='black',
                     markeredgewidth=0.5, lonlat=False)
         plt.savefig(sky_fraction_out, dpi=450, bbox_inches="tight")
         plt.close()
+
+    # Plot histogram of GA radial distances
+    print("Plotting GA radial distance histogram...")
+    ga_distances = np.sqrt(((stacked_positions - box_center) ** 2).sum(axis=1))
+    hist_out = out_dir / f"GA_distance_histogram_sigma{center_sigma:.1f}.png"
+
+    with plt.style.context("science"):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.hist(ga_distances, bins=50, color='steelblue', alpha=0.7,
+                edgecolor='black', linewidth=0.5)
+        ax.set_xlabel(r"$r ~ [h^{-1}\,\mathrm{Mpc}]$")
+        ax.set_ylabel(r"Count")
+        ax.axvline(Rmax_ga, color='red', linestyle='--', linewidth=1,
+                   label=f'Max: {Rmax_ga:.1f}')
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(hist_out, dpi=450)
+        plt.close(fig)
 
     print(f"Used {n_used} realizations.")
     print(f"Median centroid (Mpc/h): {center}")
