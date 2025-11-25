@@ -20,6 +20,7 @@ import flowi
 import matplotlib.pyplot as plt
 import numpy as np
 import scienceplots  # noqa
+from scipy.stats import gaussian_kde
 from h5py import File
 
 from config import data_root, results_root
@@ -134,7 +135,22 @@ def collect_ga_member_positions(cluster_file, ga_file, sigma):
     return np.vstack(positions), used
 
 
-def save_projection(proj, labels, outfile, half_width):
+def contour_level_for_fraction(arr, frac=0.95):
+    """Value threshold enclosing given fraction of total counts."""
+    flat = arr.ravel()
+    total = flat.sum()
+    if total <= 0:
+        return None
+    order = np.argsort(flat)[::-1]
+    csum = np.cumsum(flat[order])
+    idx = np.searchsorted(csum, frac * total, side="left")
+    if idx >= flat.size:
+        return None
+    return flat[order[idx]]
+
+
+def save_projection(proj, labels, outfile, half_width,
+                    scatter=None, contour_data=None, contour_level=None):
     extent = (-half_width, half_width, -half_width, half_width)
     with plt.style.context("science"):
         fig, ax = plt.subplots()
@@ -149,6 +165,20 @@ def save_projection(proj, labels, outfile, half_width):
         ylab = fr"${labels[1]} ~ [h^{{-1}}\,\mathrm{{Mpc}}]$"
         ax.set_xlabel(xlab)
         ax.set_ylabel(ylab)
+        if scatter is not None and scatter.size > 0:
+            ax.scatter(
+                scatter[:, 0], scatter[:, 1],
+                s=2, c="red", alpha=0.3, linewidths=0
+            )
+        if contour_data is not None and contour_level is not None:
+            ax.contour(
+                contour_data.T,
+                levels=[contour_level],
+                colors="red",
+                linewidths=1.0,
+                origin="lower",
+                extent=extent,
+            )
         cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.0)
         cbar.set_label(r"$\rho\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$")
         fig.tight_layout()
@@ -159,9 +189,13 @@ def save_projection(proj, labels, outfile, half_width):
 def main():
     center_sigma = 4.0
     plot_sigma = 2.0
-    half_width = 50.0
+    half_width = 100.0
     out_dir = results_root / "GA_plots"
     cluster_file = results_root / "manticore_voxel_clusters.hdf5"
+
+    contour_downsample = 25
+    contour_frac = 0.99
+    kde_grid = 50
 
     ga_file = results_root / "GA_analysis.hdf5"
     if out_dir.exists():
@@ -176,9 +210,8 @@ def main():
 
     # Stack GA-member voxel positions across realizations
     stacked_positions, n_pos_fields = collect_ga_member_positions(
-        cluster_file, ga_file, center_sigma
-    )
-    print(f"Mean of stacked positions is {stacked_positions.mean(axis=0)}")
+        cluster_file, ga_file, center_sigma)
+
     pos_out = out_dir / f"GA_member_positions_sigma{center_sigma:.1f}.npy"
     np.save(pos_out, stacked_positions)
     print(
@@ -201,21 +234,57 @@ def main():
     cube_mean = cube_sum / n_used
     proj_yz, proj_xz, proj_xy = project_cube(cube_mean)
 
+    # Scatter overlays: keep points within the displayed cube
+    rel = stacked_positions - center
+    rel = (rel + box_size / 2) % box_size - box_size / 2
+    mask_pts = np.all(np.abs(rel) <= half_width, axis=1)
+    rel = rel[mask_pts]
+
+    # 3D KDE evaluated on a grid, then projected
+    def kde_projection(points):
+        if points.shape[0] < 10:
+            return None, None, None, None, None, None
+        if contour_downsample > 1 and points.shape[0] > contour_downsample:
+            points = points[::contour_downsample]
+        kde = gaussian_kde(points.T)
+        grid = np.linspace(-half_width, half_width, kde_grid)
+        xg, yg, zg = np.meshgrid(grid, grid, grid, indexing="ij")
+        coords = np.vstack([xg.ravel(), yg.ravel(), zg.ravel()])
+        dens = kde(coords).reshape(kde_grid, kde_grid, kde_grid)
+        proj_yz = dens.sum(axis=0)
+        proj_xz = dens.sum(axis=1)
+        proj_xy = dens.sum(axis=2)
+        lvl_yz = contour_level_for_fraction(proj_yz, frac=contour_frac)
+        lvl_xz = contour_level_for_fraction(proj_xz, frac=contour_frac)
+        lvl_xy = contour_level_for_fraction(proj_xy, frac=contour_frac)
+        return proj_yz, proj_xz, proj_xy, lvl_yz, lvl_xz, lvl_xy
+
+    dens_yz, dens_xz, dens_xy, lvl_yz, lvl_xz, lvl_xy = kde_projection(rel)
+
     base = out_dir / (
         f"GA_projection_center{center_sigma:.1f}_plot{plot_sigma:.1f}"
     )
 
     save_projection(
         proj_yz, ("y", "z"),
-        base.with_name(f"{base.name}_yz.png"), half_width
+        base.with_name(f"{base.name}_yz.png"), half_width,
+        scatter=rel[:, [1, 2]],
+        contour_data=dens_yz,
+        contour_level=lvl_yz
     )
     save_projection(
         proj_xz, ("x", "z"),
-        base.with_name(f"{base.name}_xz.png"), half_width
+        base.with_name(f"{base.name}_xz.png"), half_width,
+        scatter=rel[:, [0, 2]],
+        contour_data=dens_xz,
+        contour_level=lvl_xz
     )
     save_projection(
         proj_xy, ("x", "y"),
-        base.with_name(f"{base.name}_xy.png"), half_width
+        base.with_name(f"{base.name}_xy.png"), half_width,
+        scatter=rel[:, [0, 1]],
+        contour_data=dens_xy,
+        contour_level=lvl_xy
     )
     print(f"Used {n_used} realizations.")
     print(f"Median centroid (Mpc/h): {center}")
