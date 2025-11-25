@@ -73,6 +73,67 @@ def project_cube(cube):
     )
 
 
+def collect_ga_member_positions(cluster_file, ga_file, sigma):
+    """
+    Stack Cartesian positions of GA-member voxels across realizations.
+
+    Parameters
+    ----------
+    cluster_file : str or Path
+        Path to manticore_voxel_clusters.hdf5.
+    ga_file : str or Path
+        Path to GA_analysis.hdf5.
+    sigma : float
+        Smoothing scale key to select (sigma_X in the files).
+
+    Returns
+    -------
+    tuple
+        (positions, n_fields_used) where positions is (N, 3) array.
+    """
+    positions = []
+    used = 0
+    key = f"sigma_{sigma}"
+    with File(cluster_file, "r") as clf, File(ga_file, "r") as gaf:
+        max_distance = float(clf.attrs.get("max_distance", 0))
+        for fname in sorted(k for k in gaf if k.startswith("field_")):
+            if fname not in clf:
+                continue
+            g_ga = gaf[fname]
+            g_cl = clf[fname]
+            if key not in g_ga or key not in g_cl:
+                continue
+            sg = g_ga[key]
+            if not sg.attrs.get("matched", False):
+                continue
+            ga_idx = int(sg.attrs["index"])
+            members_ds = g_cl[key]["members"]
+            if ga_idx >= members_ds.shape[0]:
+                continue
+            members = members_ds[ga_idx]
+            if members.size == 0:
+                continue
+            box_size = float(g_ga.attrs["box_size"])
+            resolution = int(g_ga.attrs["resolution"])
+            observer = np.full(3, box_size / 2.0, dtype=float)
+            x0 = flowi.create_initial_positions(
+                box_size,
+                resolution,
+                N=None,
+                observer_location=observer,
+                max_distance=max_distance if max_distance > 0 else None,
+                verbose=False,
+            )
+            x0 = np.asarray(x0)[members]
+            positions.append(x0)
+            used += 1
+
+    if not positions:
+        raise RuntimeError(f"No GA members found for sigma={sigma}")
+
+    return np.vstack(positions), used
+
+
 def save_projection(proj, labels, outfile, half_width):
     extent = (-half_width, half_width, -half_width, half_width)
     with plt.style.context("science"):
@@ -84,8 +145,8 @@ def save_projection(proj, labels, outfile, half_width):
             cmap="viridis",
             interpolation="nearest",
         )
-        xlab = fr"$\mathrm{{{labels[0]}}} ~ [h^{{-1}}\,\mathrm{{Mpc}}]$"
-        ylab = fr"$\mathrm{{{labels[1]}}} ~ [h^{{-1}}\,\mathrm{{Mpc}}]$"
+        xlab = fr"${labels[0]} ~ [h^{{-1}}\,\mathrm{{Mpc}}]$"
+        ylab = fr"${labels[1]} ~ [h^{{-1}}\,\mathrm{{Mpc}}]$"
         ax.set_xlabel(xlab)
         ax.set_ylabel(ylab)
         cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.0)
@@ -97,9 +158,10 @@ def save_projection(proj, labels, outfile, half_width):
 
 def main():
     center_sigma = 4.0
-    plot_sigma = 1.0
+    plot_sigma = 2.0
     half_width = 50.0
     out_dir = results_root / "GA_plots"
+    cluster_file = results_root / "manticore_voxel_clusters.hdf5"
 
     ga_file = results_root / "GA_analysis.hdf5"
     if out_dir.exists():
@@ -110,8 +172,21 @@ def main():
     center, field_ids, box_size = matched_centers(ga_file, center_sigma)
     cube_sum = None
     n_used = 0
+    print(f"Found center at {center} in box of size {box_size} Mpc/h")
 
-    for fid in field_ids:
+    # Stack GA-member voxel positions across realizations
+    stacked_positions, n_pos_fields = collect_ga_member_positions(
+        cluster_file, ga_file, center_sigma
+    )
+    print(f"Mean of stacked positions is {stacked_positions.mean(axis=0)}")
+    pos_out = out_dir / f"GA_member_positions_sigma{center_sigma:.1f}.npy"
+    np.save(pos_out, stacked_positions)
+    print(
+        f"Saved stacked GA member positions ({stacked_positions.shape[0]} rows) "  # noqa
+        f"from {n_pos_fields} fields to {pos_out}"
+    )
+
+    for fid in field_ids[:1]:
         density = flowi.ManticoreLoader(data_root, fid).load_density_field()
         if plot_sigma > 0.0:
             density = flowi.smooth_scalar_field_gaussian(
@@ -129,16 +204,17 @@ def main():
     base = out_dir / (
         f"GA_projection_center{center_sigma:.1f}_plot{plot_sigma:.1f}"
     )
+
     save_projection(
-        proj_yz, ("SGY", "SGZ"),
+        proj_yz, ("y", "z"),
         base.with_name(f"{base.name}_yz.png"), half_width
     )
     save_projection(
-        proj_xz, ("SGX", "SGZ"),
+        proj_xz, ("x", "z"),
         base.with_name(f"{base.name}_xz.png"), half_width
     )
     save_projection(
-        proj_xy, ("SGX", "SGY"),
+        proj_xy, ("x", "y"),
         base.with_name(f"{base.name}_xy.png"), half_width
     )
     print(f"Used {n_used} realizations.")
