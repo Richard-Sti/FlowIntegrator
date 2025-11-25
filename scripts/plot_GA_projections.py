@@ -190,7 +190,7 @@ def save_projection(proj, labels, outfile, half_width,
                 contour_data.T,
                 levels=[contour_level],
                 colors="red",
-                linewidths=1.0,
+                linewidths=0.5,
                 origin="lower",
                 extent=extent,
             )
@@ -201,55 +201,60 @@ def save_projection(proj, labels, outfile, half_width,
         plt.close(fig)
 
 
-def plot_ga_sky_map(positions, center, outfile, weights=None, nside=32,
-                    max_distance=None):
+def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
+                              Rmax, dr, nside=32, Rmin=0,
+                              unit=r"$\langle \rho \rangle\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$",  # noqa
+                              r_power=0,
+                              coords=None,
+                              highlight_gal=None):
     """
-    Plot a HEALPix sky map of GA member positions in Galactic coords.
+    Project a 3D density grid to a HEALPix map using nearest-grid-point rays.
 
     Parameters
     ----------
-    positions : ndarray
-        Cartesian positions (n, 3) in ICRS.
-    center : array-like
-        Observer location in ICRS Cartesian (same units as positions).
+    rho : ndarray
+        3D density grid (h^2 Msun / kpc^3).
+    box_size : float
+        Box size (h^-1 Mpc).
+    observer : array-like
+        Observer position in ICRS Cartesian.
     outfile : Path
         Output image path.
-    weights : array-like, optional
-        Weights per position (e.g., masses). If None, use unity.
+    Rmax : float
+        Maximum radius to integrate along each line of sight.
+    dr : float
+        Radial step for integration.
     nside : int, optional
         HEALPix nside.
-    max_distance : float, optional
-        Maximum distance from center to include. If None, include all.
+    Rmin : float, optional
+        Minimum radius to integrate from.
+    unit : str, optional
+        Unit string for the colorbar.
     """
-    weights = np.ones(positions.shape[0], dtype=float) if weights is None else np.asarray(weights, dtype=float)  # noqa
-    r, ell, b = flowi.cartesian_icrs_to_galactic_spherical(positions, center)
-
-    if max_distance is not None:
-        mask = r <= max_distance
-        r = r[mask]
-        ell = ell[mask]
-        b = b[mask]
-        weights = weights[mask]
-
-    theta = np.deg2rad(90.0 - b)
-    phi = np.deg2rad(ell % 360.0)
-    pix = hp.ang2pix(nside, theta, phi)
-    npix = hp.nside2npix(nside)
-    wsum = np.bincount(pix, weights=weights, minlength=npix)
-    cnt = np.bincount(pix, minlength=npix)
-    m = np.divide(
-        wsum, cnt, out=np.full_like(wsum, np.nan, dtype=float), where=cnt > 0)
+    print("Observer position:", observer)
+    print("Box size:", box_size)
+    print("Coords:", coords)
+    # Use the existing utility
+    m = flowi.utils.grid_ngp_projection(
+        nside, rho, box_size, np.asarray(observer, dtype=float),
+        Rmax, dr, Rmin=Rmin, coords=coords, verbose=True,
+        r_power=r_power,
+    )
     with plt.style.context("science"):
-        hp.mollview(
-            m, title="", unit=r"$\langle M \\rangle\ [h^2\,M_\\odot]$",
-            cbar=True)
+        hp.mollview(m, title="", unit=unit, cbar=True)
+        if highlight_gal is not None:
+            ell_h, b_h = highlight_gal
+            theta_h = np.deg2rad(90.0 - b_h)
+            phi_h = np.deg2rad(ell_h)
+            hp.projplot(theta_h, phi_h, "rx", markersize=6, alpha=0.9,
+                        lonlat=False)
         plt.savefig(outfile, dpi=450, bbox_inches="tight")
         plt.close()
 
 
 def main():
     center_sigma = 4.0
-    plot_sigma = 2.0
+    plot_sigma = 0
     half_width = 90
     out_dir = results_root / "GA_plots"
     cluster_file = results_root / "manticore_voxel_clusters.hdf5"
@@ -277,7 +282,8 @@ def main():
         cluster_file, ga_file, center_sigma)
 
     resolution = None
-    for fid in field_ids[:5]:
+    density_mean = None
+    for fid in field_ids[:1]:
         density = flowi.ManticoreLoader(data_root, fid).load_density_field()
         if resolution is None:
             resolution = density.shape[0]
@@ -288,11 +294,17 @@ def main():
         cube = extract_cube(density, center, half_width, box_size)
         if cube_sum is None:
             cube_sum = np.zeros_like(cube, dtype=float)
+
+        if density_mean is None:
+            density_mean = np.zeros_like(density, dtype=float)
+
         cube_sum += cube
+        density_mean += density
         n_used += 1
         print(f"Processed field {fid}")
 
     cube_mean = cube_sum / n_used
+    density_mean /= n_used
     proj_yz, proj_xz, proj_xy = project_cube(cube_mean)
 
     # Scatter overlays: keep points within the displayed cube
@@ -361,27 +373,26 @@ def main():
         ga_center=(center[0] - box_center[0], center[1] - box_center[1])
     )
 
-    # Sky map of mean density within spherical cut about observer
+    # Sky map of mean density within spherical cut about observer using NGP
+    # projection
     if resolution is None:
         resolution = cube_mean.shape[0]
-    idx_cube = cube_indices(center, half_width, box_size, resolution)
-    voxel = box_size / resolution
-    ixg, iyg, izg = np.meshgrid(idx_cube[0], idx_cube[1], idx_cube[2],
-                                indexing="ij")
-    pos_cube = np.stack(
-        [
-            (ixg + 0.5) * voxel,
-            (iyg + 0.5) * voxel,
-            (izg + 0.5) * voxel,
-        ],
-        axis=-1).reshape(-1, 3)
 
-    voxel_volume = voxel**3
-    mass_cube = cube_mean.ravel() * voxel_volume
+    voxel = box_size / resolution
     sky_density_out = out_dir / f"GA_sky_density_sigma{center_sigma:.1f}.png"
-    plot_ga_sky_map(
-        pos_cube, box_center, sky_density_out,
-        weights=mass_cube, nside=16, max_distance=100
+    plot_ga_sky_map_from_grid(
+        density_mean,
+        box_size=box_size,
+        observer=box_center,
+        outfile=sky_density_out,
+        Rmax=100,
+        dr=0.1 * voxel,
+        nside=32,
+        Rmin=0,
+        r_power=2,
+        unit=r"$\langle \rho \rangle\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$",
+        coords="icrs->galactic",
+        highlight_gal=None,
     )
     print(f"Used {n_used} realizations.")
     print(f"Median centroid (Mpc/h): {center}")
