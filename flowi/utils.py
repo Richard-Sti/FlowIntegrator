@@ -52,7 +52,8 @@ def fprint(*args, verbose=True, **kwargs):
 
 
 def create_initial_positions(box_size, resolution, N=None,
-                             observer_location=None, max_distance=None):
+                             observer_location=None, max_distance=None,
+                             verbose=True):
     """
     Create initial particle positions on a grid.
 
@@ -77,6 +78,8 @@ def create_initial_positions(box_size, resolution, N=None,
         The maximum distance from the `observer_location` to include particles.
         If provided along with `observer_location`, only particles within
         this distance will be returned. Default: None.
+    verbose : bool, optional
+        If True, print informational messages. Default: True.
 
     Returns
     -------
@@ -105,9 +108,10 @@ def create_initial_positions(box_size, resolution, N=None,
         )
         initial_positions = initial_positions[distances <= max_distance]
         fprint(f"Filtered to {initial_positions.shape[0]} particles "
-               f"within {max_distance} Mpc/h of observer.")
+               f"within {max_distance} Mpc/h of observer.", verbose=verbose)
 
-    fprint(f"Initialized {initial_positions.shape[0]} particles on device.")
+    fprint(f"Initialized {initial_positions.shape[0]} particles on device.",
+           verbose=verbose)
     return initial_positions
 
 
