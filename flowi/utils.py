@@ -247,7 +247,6 @@ def grid_ngp_projection(nside, rho, boxsize, observer, Rmax,
             np.sin(theta) * np.sin(phi),
             np.cos(theta)
             ], axis=1)
-        print("pix_rhat shape:", pix_rhat.shape)
     else:
         pix_rhat = np.array(hp.pix2vec(nside, np.arange(npix))).T
 
