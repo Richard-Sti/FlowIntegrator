@@ -26,7 +26,8 @@ import jax.numpy as jnp
 import numpy as np
 import scipy.ndimage as ndi
 from astropy.coordinates import (ICRS, CartesianRepresentation, Galactic,
-                                 SphericalRepresentation, Supergalactic)
+                                 SkyCoord, SphericalRepresentation,
+                                 Supergalactic)
 from scipy.integrate import simpson
 from scipy.interpolate import RegularGridInterpolator
 from tqdm import trange
@@ -193,8 +194,29 @@ def cartesian_icrs_to_supergalactic_spherical(pos, center):
     return _cartesian_icrs_to_spherical(pos, center, Supergalactic)
 
 
+def galactic_to_radec(l_deg, b_deg):
+    """Convert Galactic longitude and latitude to equatorial coordinates."""
+    ell, b = np.broadcast_arrays(np.asarray(l_deg, dtype=float),
+                                 np.asarray(b_deg, dtype=float))
+    coord = SkyCoord(l=ell * u.deg, b=b * u.deg, frame="galactic").icrs
+    ra = coord.ra.to_value(u.deg)
+    dec = coord.dec.to_value(u.deg)
+    return ra, dec
+
+
+def radec_to_galactic(ra_deg, dec_deg):
+    """Convert equatorial coordinates to Galactic longitude and latitude."""
+    ra, dec = np.broadcast_arrays(np.asarray(ra_deg, dtype=float),
+                                  np.asarray(dec_deg, dtype=float))
+    coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs").galactic
+    ell = coord.l.to_value(u.deg)
+    b = coord.b.to_value(u.deg)
+    return ell, b
+
+
 def grid_ngp_projection(nside, rho, boxsize, observer, Rmax,
-                        dr, Rmin=0, chunksize=10_000, r_power=2, verbose=True):
+                        dr, Rmin=0, chunksize=10_000, r_power=2,
+                        coords=None, verbose=True):
     nx, ny, nz = rho.shape
     x = (np.arange(nx) + 0.5) * boxsize / nx
     y = (np.arange(ny) + 0.5) * boxsize / ny
@@ -207,14 +229,27 @@ def grid_ngp_projection(nside, rho, boxsize, observer, Rmax,
     # Radial samples
     r = np.arange(Rmin, Rmax + dr, dr)
     nr = r.size
-    fprint(f"going to evaluate {nr} radial samples from {Rmin} to {Rmax}...",
+    fprint(f"going to evaluate {nr} radial samples from {Rmin} to {Rmax} "
+           f"with dr={dr} and r_power={r_power}...",
            verbose=verbose)
 
     npix = hp.nside2npix(nside)
     map_out = np.zeros(npix, dtype=np.float64)
 
-    # Pixel directions
-    pix_rhat = np.array(hp.pix2vec(nside, np.arange(npix))).T  # (npix,3)
+    # Pixel directions; optional coord conversion
+    theta, phi = hp.pix2ang(nside, np.arange(npix))
+    if coords == "icrs->galactic":
+        ra, dec = galactic_to_radec(
+            np.rad2deg(phi), 90.0 - np.rad2deg(theta))
+        theta, phi = np.deg2rad(90.0 - dec), np.deg2rad(ra)
+        pix_rhat = np.stack([
+            np.sin(theta) * np.cos(phi),
+            np.sin(theta) * np.sin(phi),
+            np.cos(theta)
+            ], axis=1)
+        print("pix_rhat shape:", pix_rhat.shape)
+    else:
+        pix_rhat = np.array(hp.pix2vec(nside, np.arange(npix))).T
 
     norm = simpson(r**r_power, x=r)
 
