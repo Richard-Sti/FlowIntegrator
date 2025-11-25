@@ -201,12 +201,60 @@ def save_projection(proj, labels, outfile, half_width,
         plt.close(fig)
 
 
+def create_ga_mask(ga_positions, box_size, resolution, observer, max_distance):
+    """
+    Create a 3D binary mask of GA member voxels.
+
+    Parameters
+    ----------
+    ga_positions : ndarray
+        GA member positions (n, 3) in ICRS.
+    box_size : float
+        Box size.
+    resolution : int
+        Grid resolution.
+    observer : array-like
+        Observer position.
+    max_distance : float
+        Maximum distance for creating initial positions grid.
+
+    Returns
+    -------
+    ndarray
+        3D binary mask where 1 = GA member, 0 = not GA.
+    """
+    # Create initial positions grid
+    x0 = flowi.create_initial_positions(
+        box_size, resolution, N=None,
+        observer_location=observer,
+        max_distance=max_distance if max_distance > 0 else None,
+        verbose=False
+    )
+    x0 = np.asarray(x0)
+
+    # Create binary mask
+    mask = np.zeros(resolution**3, dtype=bool)
+
+    # Find which grid points match GA positions
+    # Use a spatial approach: round positions to voxel indices
+    voxel_size = box_size / resolution
+    ga_indices = np.floor(ga_positions / voxel_size).astype(int) % resolution
+    ga_flat = (ga_indices[:, 0] * resolution**2 +
+               ga_indices[:, 1] * resolution +
+               ga_indices[:, 2])
+
+    mask[ga_flat] = True
+    return mask.reshape((resolution, resolution, resolution))
+
+
 def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
                               Rmax, dr, nside=32, Rmin=0,
                               unit=r"$\langle \rho \rangle\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$",  # noqa
                               r_power=0,
                               coords=None,
-                              highlight_gal=None):
+                              highlight_gal=None,
+                              scatter_positions=None,
+                              scatter_center=None):
     """
     Project a 3D density grid to a HEALPix map using nearest-grid-point rays.
 
@@ -231,9 +279,6 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
     unit : str, optional
         Unit string for the colorbar.
     """
-    print("Observer position:", observer)
-    print("Box size:", box_size)
-    print("Coords:", coords)
     # Use the existing utility
     m = flowi.utils.grid_ngp_projection(
         nside, rho, box_size, np.asarray(observer, dtype=float),
@@ -242,6 +287,16 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
     )
     with plt.style.context("science"):
         hp.mollview(m, title="", unit=unit, cbar=True)
+
+        if scatter_positions is not None and scatter_center is not None:
+            # Convert scatter positions to Galactic coordinates
+            r_s, ell_s, b_s = flowi.cartesian_icrs_to_galactic_spherical(
+                scatter_positions, scatter_center)
+            theta_s = np.deg2rad(90.0 - b_s)
+            phi_s = np.deg2rad(ell_s % 360.0)
+            hp.projscatter(theta_s, phi_s, lonlat=False, s=1, c='red',
+                           alpha=0.3, linewidths=0)
+
         if highlight_gal is not None:
             ell_h, b_h = highlight_gal
             theta_h = np.deg2rad(90.0 - b_h)
@@ -254,8 +309,9 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
 
 def main():
     center_sigma = 4.0
-    plot_sigma = 0
+    plot_sigma = 2
     half_width = 90
+    nside_map = 128
     out_dir = results_root / "GA_plots"
     cluster_file = results_root / "manticore_voxel_clusters.hdf5"
 
@@ -283,7 +339,7 @@ def main():
 
     resolution = None
     density_mean = None
-    for fid in field_ids[:1]:
+    for fid in field_ids[:10]:
         density = flowi.ManticoreLoader(data_root, fid).load_density_field()
         if resolution is None:
             resolution = density.shape[0]
@@ -379,21 +435,70 @@ def main():
         resolution = cube_mean.shape[0]
 
     voxel = box_size / resolution
+
+    # Compute max distance from observer to GA positions
+    distances = np.sqrt(((stacked_positions - box_center) ** 2).sum(axis=1))
+    Rmax_ga = distances.max()
+    print(f"Maximum GA distance from observer: {Rmax_ga:.2f} Mpc/h")
+
     sky_density_out = out_dir / f"GA_sky_density_sigma{center_sigma:.1f}.png"
+
     plot_ga_sky_map_from_grid(
         density_mean,
         box_size=box_size,
         observer=box_center,
         outfile=sky_density_out,
-        Rmax=100,
+        Rmax=Rmax_ga,
         dr=0.1 * voxel,
-        nside=32,
+        nside=nside_map,
         Rmin=0,
         r_power=2,
         unit=r"$\langle \rho \rangle\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$",
         coords="icrs->galactic",
         highlight_gal=None,
     )
+
+    # Create GA fraction sky map
+    print("Creating GA mask...")
+    ga_mask = create_ga_mask(stacked_positions, box_size, resolution,
+                             box_center, max_distance=Rmax_ga)
+    print(f"GA mask has {ga_mask.sum()} voxels marked as GA members")
+
+    print("Computing GA fraction map...")
+    ga_fraction_map = flowi.utils.grid_ngp_projection(
+        nside=nside_map,
+        rho=ga_mask.astype(float),
+        boxsize=box_size,
+        observer=box_center,
+        Rmax=Rmax_ga,
+        dr=0.1 * voxel,
+        Rmin=0,
+        coords="icrs->galactic",
+        r_power=0,
+        verbose=True
+    )
+    print(f"GA map range: [{ga_fraction_map.min():.4e}, "
+          f"{ga_fraction_map.max():.4e}]")
+
+    sky_fraction_out = out_dir / f"GA_fraction_sigma{center_sigma:.1f}.png"
+
+    # Convert GA center to Galactic coordinates for plotting
+    (r_center, ell_center,
+     b_center) = flowi.cartesian_icrs_to_galactic_spherical(
+        center[None, :], box_center)
+    print("GA center Galactic (l, b):", ell_center[0], b_center[0])
+    theta_center = np.deg2rad(90.0 - b_center[0])
+    phi_center = np.deg2rad(ell_center[0] % 360.0)
+
+    with plt.style.context("science"):
+        hp.mollview(ga_fraction_map, title="", unit="GA presence", cbar=True,
+                    cmap="inferno")
+        hp.projplot(theta_center, phi_center, 'o', markersize=8,
+                    markerfacecolor='white', markeredgecolor='black',
+                    markeredgewidth=0.5, lonlat=False)
+        plt.savefig(sky_fraction_out, dpi=450, bbox_inches="tight")
+        plt.close()
+
     print(f"Used {n_used} realizations.")
     print(f"Median centroid (Mpc/h): {center}")
     print(f"Wrote projections to {out_dir}")
