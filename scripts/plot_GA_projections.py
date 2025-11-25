@@ -157,7 +157,7 @@ def contour_level_for_fraction(arr, frac=0.95):
 def save_projection(proj, labels, outfile, half_width,
                     scatter=None, contour_data=None, contour_level=None,
                     offset=None, observer=None, ga_center=None,
-                    cluster_data=None, in_ga=None, box_center=None):
+                    cluster_data=None, in_ga=None, box_center=None, ax=None):
     if offset is None:
         offset = (0.0, 0.0)
     extent = (
@@ -166,76 +166,147 @@ def save_projection(proj, labels, outfile, half_width,
         offset[1] - half_width,
         offset[1] + half_width,
     )
-    with plt.style.context("science"):
-        fig, ax = plt.subplots()
-        im = ax.imshow(
-            proj.T,
+
+    # Create figure if ax not provided
+    if ax is None:
+        with plt.style.context("science"):
+            fig, ax = plt.subplots()
+            own_fig = True
+    else:
+        fig = ax.figure
+        own_fig = False
+
+    im = ax.imshow(
+        proj.T,
+        origin="lower",
+        extent=extent,
+        cmap="inferno",
+        interpolation="nearest",
+    )
+    xlab = fr"${labels[0]} ~ [h^{{-1}}\,\mathrm{{Mpc}}]$"
+    ylab = fr"${labels[1]} ~ [h^{{-1}}\,\mathrm{{Mpc}}]$"
+    ax.set_xlabel(xlab)
+    ax.set_ylabel(ylab)
+    if scatter is not None and scatter.size > 0:
+        ax.scatter(
+            scatter[:, 0], scatter[:, 1],
+            s=2, c="red", alpha=0.3, linewidths=0
+        )
+    if observer is not None:
+        ax.plot(observer[0], observer[1], "kx", ms=1, alpha=0.8,
+                label="Observer")
+    if ga_center is not None:
+        ax.plot(ga_center[0], ga_center[1], "rx", ms=1, alpha=0.8,
+                label="GA center")
+    if contour_data is not None and contour_level is not None:
+        ax.contour(
+            contour_data.T,
+            levels=[contour_level],
+            colors="red",
+            linewidths=0.5,
             origin="lower",
             extent=extent,
-            cmap="inferno",
-            interpolation="nearest",
         )
-        xlab = fr"${labels[0]} ~ [h^{{-1}}\,\mathrm{{Mpc}}]$"
-        ylab = fr"${labels[1]} ~ [h^{{-1}}\,\mathrm{{Mpc}}]$"
-        ax.set_xlabel(xlab)
-        ax.set_ylabel(ylab)
-        if scatter is not None and scatter.size > 0:
-            ax.scatter(
-                scatter[:, 0], scatter[:, 1],
-                s=2, c="red", alpha=0.3, linewidths=0
+    # Plot clusters
+    if cluster_data is not None and in_ga is not None and box_center is not None:  # noqa
+        # Determine which axes we're plotting (x=0, y=1, z=2)
+        axis_map = {'x': 0, 'y': 1, 'z': 2}
+        idx_x = axis_map[labels[0]]
+        idx_y = axis_map[labels[1]]
+
+        # Plot non-GA clusters (in orange)
+        non_ga_nearby = ~in_ga
+        if non_ga_nearby.any():
+            cluster_pos = cluster_data['positions'][non_ga_nearby]
+            cluster_names = [
+                cluster_data['names'][i]
+                for i in range(len(non_ga_nearby)) if non_ga_nearby[i]
+            ]
+
+            # Extract 2D coordinates relative to box center
+            cluster_2d = (
+                cluster_pos[:, [idx_x, idx_y]]
+                - box_center[[idx_x, idx_y]])
+
+            # Check if within subbox boundaries
+            in_bounds = (
+                (cluster_2d[:, 0] >= extent[0]) & (cluster_2d[:, 0] <= extent[1]) &  # noqa
+                (cluster_2d[:, 1] >= extent[2]) & (cluster_2d[:, 1] <= extent[3])    # noqa
             )
-        if observer is not None:
-            ax.plot(observer[0], observer[1], "kx", ms=1, alpha=0.8,
-                    label="Observer")
-        if ga_center is not None:
-            ax.plot(ga_center[0], ga_center[1], "rx", ms=1, alpha=0.8,
-                    label="GA center")
-        if contour_data is not None and contour_level is not None:
-            ax.contour(
-                contour_data.T,
-                levels=[contour_level],
-                colors="red",
-                linewidths=0.5,
-                origin="lower",
-                extent=extent,
-            )
-        # Plot clusters
-        if cluster_data is not None and in_ga is not None and box_center is not None:  # noqa
-            # Get cluster positions (already in box frame)
+
+            # Plot markers
+            if in_bounds.any():
+                ax.scatter(
+                    cluster_2d[in_bounds, 0], cluster_2d[in_bounds, 1],
+                    s=7.5, c='orange', marker='o', zorder=10,
+                    linewidths=0)
+
+                # Add labels
+                for i, (name, is_in) in enumerate(zip(cluster_names,
+                                                      in_bounds)):
+                    if not is_in:
+                        continue
+                    if name.startswith('Shapley'):
+                        short_name = name
+                    elif '(' in name:
+                        short_name = name.split('(')[0].strip()
+                    else:
+                        short_name = name.split()[0]
+                    ax.text(
+                        cluster_2d[i, 0] + 2, cluster_2d[i, 1] + 2,
+                        short_name, fontsize='xx-small', color='white',
+                        ha='left', va='bottom', weight='bold')
+
+        # Plot GA clusters (in cyan)
+        if in_ga.any():
             cluster_pos = cluster_data['positions'][in_ga]
             cluster_names = [
                 cluster_data['names'][i]
                 for i in range(len(in_ga)) if in_ga[i]
-                ]
-
-            # Determine which axes we're plotting (x=0, y=1, z=2)
-            axis_map = {'x': 0, 'y': 1, 'z': 2}
-            idx_x = axis_map[labels[0]]
-            idx_y = axis_map[labels[1]]
+            ]
 
             # Extract 2D coordinates relative to box center
             cluster_2d = (
-                cluster_pos[:, [idx_x, idx_y]] - box_center[[idx_x, idx_y]])
+                cluster_pos[:, [idx_x, idx_y]]
+                - box_center[[idx_x, idx_y]])
+
+            # Check if within subbox boundaries
+            in_bounds = (
+                (cluster_2d[:, 0] >= extent[0]) & (cluster_2d[:, 0] <= extent[1]) &  # noqa
+                (cluster_2d[:, 1] >= extent[2]) & (cluster_2d[:, 1] <= extent[3])    # noqa
+            )
 
             # Plot markers
-            ax.scatter(cluster_2d[:, 0], cluster_2d[:, 1], s=7.5, c='cyan',
-                       marker='o', zorder=10, linewidths=0)
+            if in_bounds.any():
+                ax.scatter(
+                    cluster_2d[in_bounds, 0], cluster_2d[in_bounds, 1],
+                    s=7.5, c='cyan', marker='o', zorder=10, linewidths=0)
 
-            # Add labels
-            for i, name in enumerate(cluster_names):
-                if '(' in name:
-                    short_name = name.split('(')[0].strip()
-                else:
-                    short_name = name.split()[0]
-                ax.text(cluster_2d[i, 0] + 2, cluster_2d[i, 1] + 2, short_name,
-                        fontsize='xx-small', color='white', ha='left',
-                        va='bottom', weight='bold')
+                # Add labels
+                for i, (name, is_in) in enumerate(zip(cluster_names,
+                                                      in_bounds)):
+                    if not is_in:
+                        continue
+                    if name.startswith('Shapley'):
+                        short_name = name
+                    elif '(' in name:
+                        short_name = name.split('(')[0].strip()
+                    else:
+                        short_name = name.split()[0]
+                    ax.text(
+                        cluster_2d[i, 0] + 2, cluster_2d[i, 1] + 2,
+                        short_name, fontsize='xx-small', color='white',
+                        ha='left', va='bottom', weight='bold')
 
+    # Handle colorbar and saving only if we created our own figure
+    if own_fig:
         cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.0)
         cbar.set_label(r"$\rho\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$")
         fig.tight_layout()
         fig.savefig(outfile, dpi=450)
         plt.close(fig)
+    else:
+        return im
 
 
 def read_cluster_catalog(cluster_file, box_size, H0=100.0):
@@ -396,7 +467,7 @@ def create_ga_mask(ga_positions, box_size, resolution, observer, max_distance):
     return mask.reshape((resolution, resolution, resolution))
 
 
-def plot_clusters_on_healpy(cluster_data, in_ga, observer):
+def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0):
     """
     Plot clusters on current HEALPix map.
 
@@ -408,8 +479,57 @@ def plot_clusters_on_healpy(cluster_data, in_ga, observer):
         Boolean array indicating which clusters are in GA.
     observer : array-like
         Observer position.
+    max_distance : float
+        Maximum distance to plot clusters (Mpc/h).
     """
-    # Get clusters that are in GA
+    # Calculate distances from observer
+    distances = np.sqrt(
+        ((cluster_data['positions'] - observer) ** 2).sum(axis=1))
+    within_distance = distances <= max_distance
+
+    # Plot non-GA clusters within distance (in orange)
+    non_ga_nearby = within_distance & ~in_ga
+    if non_ga_nearby.any():
+        nearby_names = [
+            cluster_data['names'][i]
+            for i in range(len(in_ga)) if non_ga_nearby[i]]
+        nearby_ell = cluster_data['ell'][non_ga_nearby]
+        nearby_b = cluster_data['b'][non_ga_nearby]
+
+        theta_nearby = np.deg2rad(90.0 - nearby_b)
+        phi_nearby = np.deg2rad(nearby_ell % 360.0)
+
+        for i, (theta, phi, name) in enumerate(zip(theta_nearby,
+                                                   phi_nearby,
+                                                   nearby_names)):
+            # Plot marker in orange
+            hp.projplot(theta, phi, 'o', markersize=6,
+                        markerfacecolor='orange', markeredgecolor='black',
+                        markeredgewidth=0.8, lonlat=False)
+
+            # Add text label
+            if name.startswith('Shapley'):
+                short_name = name
+            elif '(' in name:
+                short_name = name.split('(')[0].strip()
+            else:
+                short_name = name.split()[0]
+
+            # Position text below for Coma, above for others
+            if name.startswith('Coma'):
+                text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
+                text_theta = theta + np.deg2rad(2.0)
+                va = 'top'
+            else:
+                text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
+                text_theta = theta - np.deg2rad(2.0)
+                va = 'bottom'
+
+            hp.projtext(text_theta, text_phi, short_name, lonlat=False,
+                        fontsize='small', color='white', ha='left',
+                        va=va)
+
+    # Plot GA clusters (in cyan)
     ga_cluster_names = [
         cluster_data['names'][i] for i in range(len(in_ga)) if in_ga[i]]
     ga_cluster_ell = cluster_data['ell'][in_ga]
@@ -429,16 +549,25 @@ def plot_clusters_on_healpy(cluster_data, in_ga, observer):
                     markeredgewidth=0.8, lonlat=False)
 
         # Add text label - extract cluster name (before parentheses)
-        if '(' in name:
+        if name.startswith('Shapley'):
+            short_name = name
+        elif '(' in name:
             short_name = name.split('(')[0].strip()
         else:
             short_name = name.split()[0]  # First word
 
-        # Small rightward shift
-        text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
-        text_theta = theta - np.deg2rad(2.0)
+        # Position text below for Coma, above for others
+        if name.startswith('Coma'):
+            text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
+            text_theta = theta + np.deg2rad(2.0)
+            va = 'top'
+        else:
+            text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
+            text_theta = theta - np.deg2rad(2.0)
+            va = 'bottom'
+
         hp.projtext(text_theta, text_phi, short_name, lonlat=False,
-                    fontsize='small', color='black', ha='left', va='bottom')
+                    fontsize='small', color='black', ha='left', va=va)
 
 
 def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
@@ -539,7 +668,7 @@ def main():
 
     resolution = None
     density_mean = None
-    for fid in field_ids[:10]:
+    for fid in field_ids:
         density = flowi.ManticoreLoader(data_root, fid).load_density_field()
         if resolution is None:
             resolution = density.shape[0]
@@ -633,48 +762,70 @@ def main():
         f"GA_projection_center{center_sigma:.1f}_plot{plot_sigma:.1f}"
     )
 
-    save_projection(
-        proj_yz, ("y", "z"),
-        base.with_name(f"{base.name}_yz.png"), half_width,
-        scatter=rel_box[:, [1, 2]] if show_scatter else None,
-        contour_data=dens_yz,
-        contour_level=lvl_yz,
-        offset=(center[1] - box_center[1], center[2] - box_center[2]),
-        observer=(0.0, 0.0),
-        ga_center=(center[1] - box_center[1], center[2] - box_center[2]),
-        cluster_data=cluster_data,
-        in_ga=in_ga,
-        box_center=box_center
-    )
-    save_projection(
-        proj_xz, ("x", "z"),
-        base.with_name(f"{base.name}_xz.png"), half_width,
-        scatter=rel_box[:, [0, 2]] if show_scatter else None,
-        contour_data=dens_xz,
-        contour_level=lvl_xz,
-        offset=(center[0] - box_center[0], center[2] - box_center[2]),
-        observer=(0.0, 0.0),
-        ga_center=(center[0] - box_center[0], center[2] - box_center[2]),
-        cluster_data=cluster_data,
-        in_ga=in_ga,
-        box_center=box_center
-    )
-    save_projection(
-        proj_xy, ("x", "y"),
-        base.with_name(f"{base.name}_xy.png"), half_width,
-        scatter=rel_box[:, [0, 1]] if show_scatter else None,
-        contour_data=dens_xy,
-        contour_level=lvl_xy,
-        offset=(center[0] - box_center[0], center[1] - box_center[1]),
-        observer=(0.0, 0.0),
-        ga_center=(center[0] - box_center[0], center[1] - box_center[1]),
-        cluster_data=cluster_data,
-        in_ga=in_ga,
-        box_center=box_center
-    )
+    # Create 3-panel figure
+    with plt.style.context("science"):
+        fig, axes = plt.subplots(1, 3, figsize=(10, 4))
+
+        # YZ projection
+        im0 = save_projection(
+            proj_yz, ("y", "z"),
+            None, half_width,
+            scatter=rel_box[:, [1, 2]] if show_scatter else None,
+            contour_data=dens_yz,
+            contour_level=lvl_yz,
+            offset=(center[1] - box_center[1], center[2] - box_center[2]),
+            observer=(0.0, 0.0),
+            ga_center=(center[1] - box_center[1], center[2] - box_center[2]),
+            cluster_data=cluster_data,
+            in_ga=in_ga,
+            box_center=box_center,
+            ax=axes[0]
+        )
+
+        # XZ projection
+        im1 = save_projection(
+            proj_xz, ("x", "z"),
+            None, half_width,
+            scatter=rel_box[:, [0, 2]] if show_scatter else None,
+            contour_data=dens_xz,
+            contour_level=lvl_xz,
+            offset=(center[0] - box_center[0], center[2] - box_center[2]),
+            observer=(0.0, 0.0),
+            ga_center=(center[0] - box_center[0], center[2] - box_center[2]),
+            cluster_data=cluster_data,
+            in_ga=in_ga,
+            box_center=box_center,
+            ax=axes[1]
+        )
+
+        # XY projection
+        im2 = save_projection(
+            proj_xy, ("x", "y"),
+            None, half_width,
+            scatter=rel_box[:, [0, 1]] if show_scatter else None,
+            contour_data=dens_xy,
+            contour_level=lvl_xy,
+            offset=(center[0] - box_center[0], center[1] - box_center[1]),
+            observer=(0.0, 0.0),
+            ga_center=(center[0] - box_center[0], center[1] - box_center[1]),
+            cluster_data=cluster_data,
+            in_ga=in_ga,
+            box_center=box_center,
+            ax=axes[2]
+        )
+
+        # Add colorbar to each panel
+        for i, (ax, im) in enumerate(zip(axes, [im0, im1, im2])):
+            cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            if i == 2:  # Only add label to rightmost panel
+                cbar.set_label(r"$\rho\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$")
+
+        fig.tight_layout()
+        fig.savefig(base.with_name(f"{base.name}_combined.pdf"), dpi=450)
+        plt.close(fig)
 
     # Plot density sky map with clusters
-    sky_density_out = out_dir / f"GA_sky_density_sigma{center_sigma:.1f}.png"
+    sky_density_out = out_dir / f"GA_sky_density_sigma{center_sigma:.1f}.pdf"
     plot_ga_sky_map_from_grid(
         density_mean,
         box_size=box_size,
@@ -710,7 +861,7 @@ def main():
     print(f"GA depth map range: [{ga_depth_map.min():.4e}, "
           f"{ga_depth_map.max():.4e}] Mpc/h")
 
-    sky_fraction_out = out_dir / f"GA_fraction_sigma{center_sigma:.1f}.png"
+    sky_fraction_out = out_dir / f"GA_fraction_sigma{center_sigma:.1f}.pdf"
 
     # Convert GA center to Galactic coordinates for plotting
     (r_center, ell_center,
@@ -741,12 +892,11 @@ def main():
     # Plot histogram of GA radial distances
     print("Plotting GA radial distance histogram...")
     ga_distances = np.sqrt(((stacked_positions - box_center) ** 2).sum(axis=1))
-    hist_out = out_dir / f"GA_distance_histogram_sigma{center_sigma:.1f}.png"
+    hist_out = out_dir / f"GA_distance_histogram_sigma{center_sigma:.1f}.pdf"
 
     with plt.style.context("science"):
-        fig, ax = plt.subplots(figsize=(6, 4))
-        ax.hist(ga_distances, bins=50, color='steelblue', alpha=0.7,
-                edgecolor='black', linewidth=0.5)
+        fig, ax = plt.subplots()
+        ax.hist(ga_distances, bins="auto", histtype='stepfilled',)
         ax.set_xlabel(r"$r ~ [h^{-1}\,\mathrm{Mpc}]$")
         ax.set_ylabel(r"Count")
         ax.axvline(Rmax_ga, color='red', linestyle='--', linewidth=1,
