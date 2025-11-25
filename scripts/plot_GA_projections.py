@@ -238,24 +238,8 @@ def save_projection(proj, labels, outfile, half_width,
             if in_bounds.any():
                 ax.scatter(
                     cluster_2d[in_bounds, 0], cluster_2d[in_bounds, 1],
-                    s=7.5, c='orange', marker='o', zorder=10,
+                    s=7.5, c='tomato', marker='o', zorder=10,
                     linewidths=0)
-
-                # Add labels
-                for i, (name, is_in) in enumerate(zip(cluster_names,
-                                                      in_bounds)):
-                    if not is_in:
-                        continue
-                    if name.startswith('Shapley'):
-                        short_name = name
-                    elif '(' in name:
-                        short_name = name.split('(')[0].strip()
-                    else:
-                        short_name = name.split()[0]
-                    ax.text(
-                        cluster_2d[i, 0] + 2, cluster_2d[i, 1] + 2,
-                        short_name, fontsize='xx-small', color='white',
-                        ha='left', va='bottom', weight='bold')
 
         # Plot GA clusters (in cyan)
         if in_ga.any():
@@ -287,9 +271,10 @@ def save_projection(proj, labels, outfile, half_width,
                                                       in_bounds)):
                     if not is_in:
                         continue
+                    name_l = name.lower()
                     if name.startswith('Shapley'):
                         short_name = name
-                    elif '(' in name:
+                    elif '(' in name and 'pavo' not in name_l:
                         short_name = name.split('(')[0].strip()
                     else:
                         short_name = name.split()[0]
@@ -467,6 +452,29 @@ def create_ga_mask(ga_positions, box_size, resolution, observer, max_distance):
     return mask.reshape((resolution, resolution, resolution))
 
 
+def plot_zone_of_avoidance(b_min=-10, b_max=10, color='#00A7C7', alpha=0.8):
+    """
+    Plot the Galactic zone of avoidance on current HEALPix map.
+
+    Parameters
+    ----------
+    b_min : float
+        Minimum Galactic latitude in degrees.
+    b_max : float
+        Maximum Galactic latitude in degrees.
+    color : str
+        Color for the zone.
+    alpha : float
+        Transparency (0=transparent, 1=opaque).
+    """
+    # Plot multiple horizontal lines to fill the band; hp handles wrap
+    ell_deg = np.linspace(0, 360, 800)
+    for b_deg in [b_min, b_max]:
+        hp.projplot(
+            ell_deg, np.full_like(ell_deg, b_deg),
+            lonlat=True, color=color, alpha=alpha, zorder=10)
+
+
 def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0):
     """
     Plot clusters on current HEALPix map.
@@ -483,51 +491,29 @@ def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0):
         Maximum distance to plot clusters (Mpc/h).
     """
     # Calculate distances from observer
-    distances = np.sqrt(
-        ((cluster_data['positions'] - observer) ** 2).sum(axis=1))
-    within_distance = distances <= max_distance
+    # distances = np.sqrt(
+    #     ((cluster_data['positions'] - observer) ** 2).sum(axis=1))
+    # within_distance = distances <= max_distance
 
-    # Plot non-GA clusters within distance (in orange)
-    non_ga_nearby = within_distance & ~in_ga
-    if non_ga_nearby.any():
-        nearby_names = [
-            cluster_data['names'][i]
-            for i in range(len(in_ga)) if non_ga_nearby[i]]
-        nearby_ell = cluster_data['ell'][non_ga_nearby]
-        nearby_b = cluster_data['b'][non_ga_nearby]
+    # # Plot non-GA clusters within distance (in orange)
+    # non_ga_nearby = within_distance & ~in_ga
+    # if non_ga_nearby.any():
+    #     nearby_names = [
+    #         cluster_data['names'][i]
+    #         for i in range(len(in_ga)) if non_ga_nearby[i]]
+    #     nearby_ell = cluster_data['ell'][non_ga_nearby]
+    #     nearby_b = cluster_data['b'][non_ga_nearby]
 
-        theta_nearby = np.deg2rad(90.0 - nearby_b)
-        phi_nearby = np.deg2rad(nearby_ell % 360.0)
+    #     theta_nearby = np.deg2rad(90.0 - nearby_b)
+    #     phi_nearby = np.deg2rad(nearby_ell % 360.0)
 
-        for i, (theta, phi, name) in enumerate(zip(theta_nearby,
-                                                   phi_nearby,
-                                                   nearby_names)):
-            # Plot marker in orange
-            hp.projplot(theta, phi, 'o', markersize=6,
-                        markerfacecolor='orange', markeredgecolor='black',
-                        markeredgewidth=0.8, lonlat=False)
-
-            # Add text label
-            if name.startswith('Shapley'):
-                short_name = name
-            elif '(' in name:
-                short_name = name.split('(')[0].strip()
-            else:
-                short_name = name.split()[0]
-
-            # Position text below for Coma, above for others
-            if name.startswith('Coma'):
-                text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
-                text_theta = theta + np.deg2rad(2.0)
-                va = 'top'
-            else:
-                text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
-                text_theta = theta - np.deg2rad(2.0)
-                va = 'bottom'
-
-            hp.projtext(text_theta, text_phi, short_name, lonlat=False,
-                        fontsize='small', color='white', ha='left',
-                        va=va)
+    #     for i, (theta, phi, name) in enumerate(zip(theta_nearby,
+    #                                                phi_nearby,
+    #                                                nearby_names)):
+    #         # Plot marker in orange
+    #         hp.projplot(theta, phi, 'o', markersize=6,
+    #                     markerfacecolor='tomato', markeredgecolor='black',
+    #                     markeredgewidth=0.8, lonlat=False)
 
     # Plot GA clusters (in cyan)
     ga_cluster_names = [
@@ -549,15 +535,17 @@ def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0):
                     markeredgewidth=0.8, lonlat=False)
 
         # Add text label - extract cluster name (before parentheses)
-        if name.startswith('Shapley'):
+        name_l = name.lower()
+        print(name, name_l)
+        if name_l.startswith('shapley'):
             short_name = name
         elif '(' in name:
             short_name = name.split('(')[0].strip()
         else:
             short_name = name.split()[0]  # First word
 
-        # Position text below for Coma, above for others
-        if name.startswith('Coma'):
+        # Position text below for Coma/Perseus, above for others
+        if name_l.startswith('coma') or 'perseus' in name_l:
             text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
             text_theta = theta + np.deg2rad(2.0)
             va = 'top'
@@ -612,6 +600,9 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
     )
     with plt.style.context("science"):
         hp.mollview(m, title="", unit=unit, cbar=True)
+
+        # Plot zone of avoidance
+        plot_zone_of_avoidance()
 
         if scatter_positions is not None and scatter_center is not None:
             # Convert scatter positions to Galactic coordinates
@@ -732,8 +723,8 @@ def main():
 
     # Compute 95th percentile distance from observer to GA positions
     distances = np.sqrt(((stacked_positions - box_center) ** 2).sum(axis=1))
-    Rmax_ga = np.percentile(distances, 99)
-    print(f"99th percentile GA distance from observer: {Rmax_ga:.2f} Mpc/h")
+    Rmax_ga = np.percentile(distances, 99.99)
+    print(f"99.99th percentile GA distance from observer: {Rmax_ga:.2f} Mpc/h")
     print(f"Maximum GA distance from observer: {distances.max():.2f} Mpc/h")
 
     # Create GA mask and check which clusters are within the GA
@@ -875,6 +866,10 @@ def main():
         hp.mollview(ga_depth_map, title="",
                     unit=r"GA depth $[h^{-1}\,\mathrm{Mpc}]$",
                     cbar=True, cmap="inferno")
+
+        # Plot zone of avoidance
+        plot_zone_of_avoidance()
+
         # GA center marker and label
         hp.projplot(theta_center, phi_center, 'o', markersize=6,
                     markerfacecolor='white', markeredgecolor='black',
@@ -896,7 +891,7 @@ def main():
 
     with plt.style.context("science"):
         fig, ax = plt.subplots()
-        ax.hist(ga_distances, bins="auto", histtype='stepfilled',)
+        ax.hist(ga_distances, bins=50, histtype='stepfilled',)
         ax.set_xlabel(r"$r ~ [h^{-1}\,\mathrm{Mpc}]$")
         ax.set_ylabel(r"Count")
         ax.axvline(Rmax_ga, color='red', linestyle='--', linewidth=1,
