@@ -29,4 +29,5 @@ from .utils import (  # noqa: F401
     smooth_scalar_field_gaussian,
     cartesian_icrs_to_galactic_spherical,
     cartesian_icrs_to_supergalactic_spherical,
+    grid_ngp_projection
 )

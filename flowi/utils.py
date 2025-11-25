@@ -21,16 +21,15 @@ preparing data.
 import datetime
 
 import astropy.units as u
+import healpy as hp
 import jax.numpy as jnp
 import numpy as np
 import scipy.ndimage as ndi
-from astropy.coordinates import (
-    ICRS,
-    CartesianRepresentation,
-    Galactic,
-    SphericalRepresentation,
-    Supergalactic,
-)
+from astropy.coordinates import (ICRS, CartesianRepresentation, Galactic,
+                                 SphericalRepresentation, Supergalactic)
+from scipy.integrate import simpson
+from scipy.interpolate import RegularGridInterpolator
+from tqdm import trange
 
 
 def fprint(*args, verbose=True, **kwargs):
@@ -192,3 +191,48 @@ def cartesian_icrs_to_galactic_spherical(pos, center):
 def cartesian_icrs_to_supergalactic_spherical(pos, center):
     """ICRS Cartesian to supergalactic spherical about center."""
     return _cartesian_icrs_to_spherical(pos, center, Supergalactic)
+
+
+def grid_ngp_projection(nside, rho, boxsize, observer, Rmax,
+                        dr, Rmin=0, chunksize=10_000, r_power=2, verbose=True):
+    nx, ny, nz = rho.shape
+    x = (np.arange(nx) + 0.5) * boxsize / nx
+    y = (np.arange(ny) + 0.5) * boxsize / ny
+    z = (np.arange(nz) + 0.5) * boxsize / nz
+
+    # Interpolator (periodic handled by manual wrapping)
+    fprint("building the 3D grid interpolator...", verbose=verbose)
+    interp = RegularGridInterpolator((x, y, z), rho, bounds_error=True)
+
+    # Radial samples
+    r = np.arange(Rmin, Rmax + dr, dr)
+    nr = r.size
+    fprint(f"going to evaluate {nr} radial samples from {Rmin} to {Rmax}...",
+           verbose=verbose)
+
+    npix = hp.nside2npix(nside)
+    map_out = np.zeros(npix, dtype=np.float64)
+
+    # Pixel directions
+    pix_rhat = np.array(hp.pix2vec(nside, np.arange(npix))).T  # (npix,3)
+
+    norm = simpson(r**r_power, x=r)
+
+    # Chunk over pixels to control memory
+    iter_kwargs = {"desc": "Projecting grid",
+                   "disable": not verbose or npix < chunksize}
+    for i0 in trange(0, npix, chunksize, **iter_kwargs):
+        i1 = min(i0 + chunksize, npix)
+        nhat = pix_rhat[i0:i1]  # (chunk_size, 3)
+
+        # Ray points: (nr, chunk_size, 3)
+        pts = observer[None, None, :] + r[:, None, None] * nhat[None, :, :]
+        pts = pts.reshape(-1, 3)
+
+        # Interpolate rho along rays, reshape to (nr, C) and integrate
+        vals = interp(pts).reshape(nr, i1 - i0)
+        vals = simpson(r[:, None]**r_power * vals, x=r, axis=0) / norm
+
+        map_out[i0:i1] = vals
+
+    return map_out
