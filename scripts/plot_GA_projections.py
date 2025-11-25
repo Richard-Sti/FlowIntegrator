@@ -22,7 +22,11 @@ import numpy as np
 import scienceplots  # noqa
 import healpy as hp
 from scipy.stats import gaussian_kde
+from scipy.interpolate import RegularGridInterpolator
 from h5py import File
+from astropy.coordinates import SkyCoord
+from astropy.cosmology import FlatLambdaCDM
+import astropy.units as u
 
 from config import data_root, results_root
 
@@ -152,7 +156,8 @@ def contour_level_for_fraction(arr, frac=0.95):
 
 def save_projection(proj, labels, outfile, half_width,
                     scatter=None, contour_data=None, contour_level=None,
-                    offset=None, observer=None, ga_center=None):
+                    offset=None, observer=None, ga_center=None,
+                    cluster_data=None, in_ga=None, box_center=None):
     if offset is None:
         offset = (0.0, 0.0)
     extent = (
@@ -194,11 +199,156 @@ def save_projection(proj, labels, outfile, half_width,
                 origin="lower",
                 extent=extent,
             )
+        # Plot clusters
+        if cluster_data is not None and in_ga is not None and box_center is not None:  # noqa
+            # Get cluster positions (already in box frame)
+            cluster_pos = cluster_data['positions'][in_ga]
+            cluster_names = [
+                cluster_data['names'][i]
+                for i in range(len(in_ga)) if in_ga[i]
+                ]
+
+            # Determine which axes we're plotting (x=0, y=1, z=2)
+            axis_map = {'x': 0, 'y': 1, 'z': 2}
+            idx_x = axis_map[labels[0]]
+            idx_y = axis_map[labels[1]]
+
+            # Extract 2D coordinates relative to box center
+            cluster_2d = (
+                cluster_pos[:, [idx_x, idx_y]] - box_center[[idx_x, idx_y]])
+
+            # Plot markers
+            ax.scatter(cluster_2d[:, 0], cluster_2d[:, 1], s=50, c='cyan',
+                       edgecolors='black', linewidths=1.5, marker='o',
+                       zorder=10)
+
+            # Add labels
+            for i, name in enumerate(cluster_names):
+                if '(' in name:
+                    short_name = name.split('(')[0].strip()
+                else:
+                    short_name = name.split()[0]
+                ax.text(cluster_2d[i, 0] + 2, cluster_2d[i, 1] + 2, short_name,
+                        fontsize=8, color='black', ha='left', va='bottom',
+                        weight='bold')
+
         cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.0)
         cbar.set_label(r"$\rho\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$")
         fig.tight_layout()
         fig.savefig(outfile, dpi=450)
         plt.close(fig)
+
+
+def read_cluster_catalog(cluster_file, box_size, H0=100.0):
+    """
+    Read local cluster catalog and convert to Cartesian ICRS coordinates.
+
+    Parameters
+    ----------
+    cluster_file : str or Path
+        Path to cluster catalog file.
+    box_size : float
+        Box size (to account for observer position at box center).
+    H0 : float
+        Hubble constant in km/s/Mpc (default: 100 for h=1 units).
+
+    Returns
+    -------
+    dict
+        Dictionary with 'names', 'positions', 'velocities', 'ell', 'b'.
+    """
+    names = []
+    ell = []
+    b = []
+    v_kms = []
+
+    with open(cluster_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            # Name can be multiple words, last 3 are numbers
+            name = ' '.join(parts[:-3])
+            ell_deg = float(parts[-3])
+            b_deg = float(parts[-2])
+            vel = float(parts[-1])
+
+            names.append(name)
+            ell.append(ell_deg)
+            b.append(b_deg)
+            v_kms.append(vel)
+
+    ell = np.array(ell)
+    b = np.array(b)
+    v_kms = np.array(v_kms)
+
+    # Convert velocities to distances using FlatLambdaCDM cosmology
+    cosmo = FlatLambdaCDM(H0=H0, Om0=0.3)
+    z = v_kms / 299792.458  # Convert velocity to redshift (v/c)
+    distances = cosmo.comoving_distance(z).value  # Mpc (comoving)
+
+    # Convert Galactic spherical to ICRS Cartesian
+    coords_gal = SkyCoord(l=ell*u.deg, b=b*u.deg, distance=distances*u.Mpc,
+                          frame='galactic')
+    coords_icrs = coords_gal.icrs
+
+    # Convert to Cartesian and add box_size/2 to account for observer position
+    positions = np.column_stack([
+        coords_icrs.cartesian.x.value,
+        coords_icrs.cartesian.y.value,
+        coords_icrs.cartesian.z.value
+    ]) + box_size / 2.0
+
+    return {
+        'names': names,
+        'positions': positions,
+        'velocities': v_kms,
+        'ell': ell,
+        'b': b,
+        'distances': distances
+    }
+
+
+def check_clusters_in_ga(cluster_data, ga_mask, box_size, resolution):
+    """
+    Check which clusters are within the GA by sampling the GA mask.
+
+    Parameters
+    ----------
+    cluster_data : dict
+        Cluster data from read_cluster_catalog.
+    ga_mask : ndarray
+        3D binary mask (1 = GA, 0 = not GA).
+    box_size : float
+        Box size.
+    resolution : int
+        Grid resolution.
+
+    Returns
+    -------
+    ndarray
+        Boolean array indicating which clusters are in GA.
+    """
+    nx, ny, nz = ga_mask.shape
+    x = (np.arange(nx) + 0.5) * box_size / nx
+    y = (np.arange(ny) + 0.5) * box_size / ny
+    z = (np.arange(nz) + 0.5) * box_size / nz
+
+    # Use nearest neighbor interpolation for binary mask
+    interp = RegularGridInterpolator((x, y, z), ga_mask.astype(float),
+                                     method='nearest', bounds_error=False,
+                                     fill_value=0.0)
+
+    # Sample mask at cluster positions
+    mask_values = interp(cluster_data['positions'])
+
+    # Cluster is in GA if mask value >= 0.5
+    in_ga = mask_values >= 0.5
+
+    return in_ga
 
 
 def create_ga_mask(ga_positions, box_size, resolution, observer, max_distance):
@@ -247,6 +397,51 @@ def create_ga_mask(ga_positions, box_size, resolution, observer, max_distance):
     return mask.reshape((resolution, resolution, resolution))
 
 
+def plot_clusters_on_healpy(cluster_data, in_ga, observer):
+    """
+    Plot clusters on current HEALPix map.
+
+    Parameters
+    ----------
+    cluster_data : dict
+        Cluster data from read_cluster_catalog.
+    in_ga : ndarray
+        Boolean array indicating which clusters are in GA.
+    observer : array-like
+        Observer position.
+    """
+    # Get clusters that are in GA
+    ga_cluster_names = [
+        cluster_data['names'][i] for i in range(len(in_ga)) if in_ga[i]]
+    ga_cluster_ell = cluster_data['ell'][in_ga]
+    ga_cluster_b = cluster_data['b'][in_ga]
+
+    # Convert to HEALPix coordinates
+    theta_clusters = np.deg2rad(90.0 - ga_cluster_b)
+    phi_clusters = np.deg2rad(ga_cluster_ell % 360.0)
+
+    # Plot each cluster
+    for i, (theta, phi, name) in enumerate(zip(theta_clusters,
+                                               phi_clusters,
+                                               ga_cluster_names)):
+        # Plot marker
+        hp.projplot(theta, phi, 'o', markersize=6,
+                    markerfacecolor='cyan', markeredgecolor='black',
+                    markeredgewidth=0.8, lonlat=False)
+
+        # Add text label - extract cluster name (before parentheses)
+        if '(' in name:
+            short_name = name.split('(')[0].strip()
+        else:
+            short_name = name.split()[0]  # First word
+
+        # Small rightward shift
+        text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
+        text_theta = theta - np.deg2rad(2.0)
+        hp.projtext(text_theta, text_phi, short_name, lonlat=False,
+                    fontsize='small', color='black', ha='left', va='bottom')
+
+
 def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
                               Rmax, dr, nside=32, Rmin=0,
                               unit=r"$\langle \rho \rangle\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$",  # noqa
@@ -254,7 +449,9 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
                               coords=None,
                               highlight_gal=None,
                               scatter_positions=None,
-                              scatter_center=None):
+                              scatter_center=None,
+                              cluster_data=None,
+                              in_ga=None):
     """
     Project a 3D density grid to a HEALPix map using nearest-grid-point rays.
 
@@ -303,6 +500,10 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
             phi_h = np.deg2rad(ell_h)
             hp.projplot(theta_h, phi_h, "rx", markersize=6, alpha=0.9,
                         lonlat=False)
+
+        if cluster_data is not None and in_ga is not None:
+            plot_clusters_on_healpy(cluster_data, in_ga, observer)
+
         plt.savefig(outfile, dpi=450, bbox_inches="tight")
         plt.close()
 
@@ -394,6 +595,41 @@ def main():
     dens_yz, dens_xz, dens_xy, lvl_yz, lvl_xz, lvl_xy = kde_projection(
         rel_center)
 
+    # Sky map of mean density within spherical cut about observer using NGP
+    # projection
+    if resolution is None:
+        resolution = cube_mean.shape[0]
+
+    voxel = box_size / resolution
+
+    # Compute 95th percentile distance from observer to GA positions
+    distances = np.sqrt(((stacked_positions - box_center) ** 2).sum(axis=1))
+    Rmax_ga = np.percentile(distances, 99)
+    print(f"99th percentile GA distance from observer: {Rmax_ga:.2f} Mpc/h")
+    print(f"Maximum GA distance from observer: {distances.max():.2f} Mpc/h")
+
+    # Create GA mask and check which clusters are within the GA
+    print("Creating GA mask...")
+    ga_mask = create_ga_mask(stacked_positions, box_size, resolution,
+                             box_center, max_distance=Rmax_ga)
+    print(f"GA mask has {ga_mask.sum()} voxels marked as GA members")
+
+    # Check which clusters are within the GA
+    print("\nChecking which clusters are within the GA...")
+    cluster_file = data_root / "local_clusters.txt"
+    cluster_data = read_cluster_catalog(cluster_file, box_size, H0=100.0)
+    in_ga = check_clusters_in_ga(cluster_data, ga_mask, box_size, resolution)
+
+    print(f"\nFound {in_ga.sum()} clusters within the GA "
+          f"(out of {len(in_ga)}):")
+    for i, name in enumerate(cluster_data['names']):
+        if in_ga[i]:
+            dist = cluster_data['distances'][i]
+            ell = cluster_data['ell'][i]
+            b = cluster_data['b'][i]
+            print(f"  {name:25s}  d={dist:6.1f} Mpc/h  "
+                  f"(l={ell:6.1f}°, b={b:6.1f}°)")
+
     base = out_dir / (
         f"GA_projection_center{center_sigma:.1f}_plot{plot_sigma:.1f}"
     )
@@ -406,7 +642,10 @@ def main():
         contour_level=lvl_yz,
         offset=(center[1] - box_center[1], center[2] - box_center[2]),
         observer=(0.0, 0.0),
-        ga_center=(center[1] - box_center[1], center[2] - box_center[2])
+        ga_center=(center[1] - box_center[1], center[2] - box_center[2]),
+        cluster_data=cluster_data,
+        in_ga=in_ga,
+        box_center=box_center
     )
     save_projection(
         proj_xz, ("x", "z"),
@@ -416,7 +655,10 @@ def main():
         contour_level=lvl_xz,
         offset=(center[0] - box_center[0], center[2] - box_center[2]),
         observer=(0.0, 0.0),
-        ga_center=(center[0] - box_center[0], center[2] - box_center[2])
+        ga_center=(center[0] - box_center[0], center[2] - box_center[2]),
+        cluster_data=cluster_data,
+        in_ga=in_ga,
+        box_center=box_center
     )
     save_projection(
         proj_xy, ("x", "y"),
@@ -426,23 +668,14 @@ def main():
         contour_level=lvl_xy,
         offset=(center[0] - box_center[0], center[1] - box_center[1]),
         observer=(0.0, 0.0),
-        ga_center=(center[0] - box_center[0], center[1] - box_center[1])
+        ga_center=(center[0] - box_center[0], center[1] - box_center[1]),
+        cluster_data=cluster_data,
+        in_ga=in_ga,
+        box_center=box_center
     )
 
-    # Sky map of mean density within spherical cut about observer using NGP
-    # projection
-    if resolution is None:
-        resolution = cube_mean.shape[0]
-
-    voxel = box_size / resolution
-
-    # Compute max distance from observer to GA positions
-    distances = np.sqrt(((stacked_positions - box_center) ** 2).sum(axis=1))
-    Rmax_ga = distances.max()
-    print(f"Maximum GA distance from observer: {Rmax_ga:.2f} Mpc/h")
-
+    # Plot density sky map with clusters
     sky_density_out = out_dir / f"GA_sky_density_sigma{center_sigma:.1f}.png"
-
     plot_ga_sky_map_from_grid(
         density_mean,
         box_size=box_size,
@@ -456,13 +689,9 @@ def main():
         unit=r"$\langle \rho \rangle\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$",
         coords="icrs->galactic",
         highlight_gal=None,
+        cluster_data=cluster_data,
+        in_ga=in_ga,
     )
-
-    # Create GA fraction sky map
-    print("Creating GA mask...")
-    ga_mask = create_ga_mask(stacked_positions, box_size, resolution,
-                             box_center, max_distance=Rmax_ga)
-    print(f"GA mask has {ga_mask.sum()} voxels marked as GA members")
 
     print("Computing GA fraction map...")
     ga_fraction_map = flowi.utils.grid_ngp_projection(
@@ -477,8 +706,10 @@ def main():
         r_power=0,
         verbose=True
     )
-    print(f"GA map range: [{ga_fraction_map.min():.4e}, "
-          f"{ga_fraction_map.max():.4e}]")
+    # Convert fraction to depth by multiplying by Rmax
+    ga_depth_map = ga_fraction_map * Rmax_ga
+    print(f"GA depth map range: [{ga_depth_map.min():.4e}, "
+          f"{ga_depth_map.max():.4e}] Mpc/h")
 
     sky_fraction_out = out_dir / f"GA_fraction_sigma{center_sigma:.1f}.png"
 
@@ -491,11 +722,20 @@ def main():
     phi_center = np.deg2rad(ell_center[0] % 360.0)
 
     with plt.style.context("science"):
-        hp.mollview(ga_fraction_map, title="", unit="Relative GA depth",
+        hp.mollview(ga_depth_map, title="",
+                    unit=r"GA depth $[h^{-1}\,\mathrm{Mpc}]$",
                     cbar=True, cmap="inferno")
-        hp.projplot(theta_center, phi_center, 'o', markersize=8,
+        # GA center marker and label
+        hp.projplot(theta_center, phi_center, 'o', markersize=6,
                     markerfacecolor='white', markeredgecolor='black',
-                    markeredgewidth=0.5, lonlat=False)
+                    markeredgewidth=0.8, lonlat=False)
+        text_phi_center = (phi_center + np.deg2rad(3.0)) % (2 * np.pi)
+        text_theta_center = theta_center - np.deg2rad(2.0)
+        hp.projtext(text_theta_center, text_phi_center, "GA center",
+                    lonlat=False, fontsize='small', color='black', ha='left',
+                    va='bottom')
+        # Plot clusters
+        plot_clusters_on_healpy(cluster_data, in_ga, box_center)
         plt.savefig(sky_fraction_out, dpi=450, bbox_inches="tight")
         plt.close()
 
