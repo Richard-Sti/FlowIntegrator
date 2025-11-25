@@ -18,6 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scienceplots  # noqa
 from pathlib import Path
+from scipy.stats import gaussian_kde
 
 import flowi
 
@@ -523,7 +524,8 @@ def plot_ga_enclosed_mass(filepath, fields=None):
 
 def load_ga_metrics(filepath, fields=None, value="ga_mass"):
     """
-    Load GA mass or volume as a function of smoothing scale for matched entries.
+    Load GA mass or volume as a function of smoothing scale for matched
+    entries.
 
     Parameters
     ----------
@@ -561,7 +563,8 @@ def load_ga_metrics(filepath, fields=None, value="ga_mass"):
             int(k.split("_")[1]) for k in h5f.keys() if k.startswith("field_")
         )
         if field_names is not None:
-            chosen_fields = [f for f in all_fields if f"field_{f}" in field_names]
+            chosen_fields = [
+                f for f in all_fields if f"field_{f}" in field_names]
         else:
             chosen_fields = all_fields
 
@@ -587,7 +590,7 @@ def load_ga_metrics(filepath, fields=None, value="ga_mass"):
     return smoothing_scales, vals
 
 
-def plot_ga_positions(filepaths, box_size, r_min=None):
+def plot_ga_positions(filepaths, box_size, r_min=None, kde=False):
     """
     Plot GA positions (r, ell, b) from a text file of endpoints.
 
@@ -600,6 +603,8 @@ def plot_ga_positions(filepaths, box_size, r_min=None):
         Simulation box size (h^-1 Mpc). Observer is assumed at box_size / 2.
     r_min : float, optional
         If provided, only plot entries with r > r_min.
+    kde : bool, optional
+        If True, plot 1D KDEs instead of histograms.
 
     Returns
     -------
@@ -653,11 +658,22 @@ def plot_ga_positions(filepaths, box_size, r_min=None):
                 label = path.stem
 
             color = colors[i % len(colors)]
-            kwargs = dict(bins="auto", color=color, histtype='stepfilled',
-                          alpha=0.5)
-            axes[0].hist(r, **kwargs, label=label)
-            axes[1].hist(ell, **kwargs)
-            axes[2].hist(b, **kwargs)
+            if kde:
+                kde_r = gaussian_kde(r)
+                kde_l = gaussian_kde(ell)
+                kde_b = gaussian_kde(b)
+                x_r = np.linspace(r.min(), r.max(), 256)
+                x_l = np.linspace(ell.min(), ell.max(), 256)
+                x_b = np.linspace(b.min(), b.max(), 256)
+                axes[0].plot(x_r, kde_r(x_r), color=color, label=label)
+                axes[1].plot(x_l, kde_l(x_l), color=color)
+                axes[2].plot(x_b, kde_b(x_b), color=color)
+            else:
+                kwargs = dict(bins="auto", color=color,
+                              histtype='stepfilled', alpha=0.5)
+                axes[0].hist(r, **kwargs, label=label)
+                axes[1].hist(ell, **kwargs)
+                axes[2].hist(b, **kwargs)
 
             p16_r, med_r, p84_r = np.percentile(r, [16, 50, 84])
             p16_l, med_l, p84_l = np.percentile(ell, [16, 50, 84])
@@ -673,7 +689,7 @@ def plot_ga_positions(filepaths, box_size, r_min=None):
             )
 
         axes[0].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
-        axes[0].set_ylabel("Counts per bin")
+        axes[0].set_ylabel("Density" if kde else "Counts per bin")
         axes[0].legend(loc='upper left')
 
         axes[1].set_xlabel(r"$\ell ~ [^\circ]$")
