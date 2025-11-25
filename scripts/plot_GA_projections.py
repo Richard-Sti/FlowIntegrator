@@ -20,6 +20,7 @@ import flowi
 import matplotlib.pyplot as plt
 import numpy as np
 import scienceplots  # noqa
+import healpy as hp
 from scipy.stats import gaussian_kde
 from h5py import File
 
@@ -150,8 +151,16 @@ def contour_level_for_fraction(arr, frac=0.95):
 
 
 def save_projection(proj, labels, outfile, half_width,
-                    scatter=None, contour_data=None, contour_level=None):
-    extent = (-half_width, half_width, -half_width, half_width)
+                    scatter=None, contour_data=None, contour_level=None,
+                    offset=None, observer=None, ga_center=None):
+    if offset is None:
+        offset = (0.0, 0.0)
+    extent = (
+        offset[0] - half_width,
+        offset[0] + half_width,
+        offset[1] - half_width,
+        offset[1] + half_width,
+    )
     with plt.style.context("science"):
         fig, ax = plt.subplots()
         im = ax.imshow(
@@ -170,6 +179,12 @@ def save_projection(proj, labels, outfile, half_width,
                 scatter[:, 0], scatter[:, 1],
                 s=2, c="red", alpha=0.3, linewidths=0
             )
+        if observer is not None:
+            ax.plot(observer[0], observer[1], "kx", ms=4, alpha=0.8,
+                    label="Observer")
+        if ga_center is not None:
+            ax.plot(ga_center[0], ga_center[1], "rx", ms=4, alpha=0.8,
+                    label="GA center")
         if contour_data is not None and contour_level is not None:
             ax.contour(
                 contour_data.T,
@@ -186,16 +201,51 @@ def save_projection(proj, labels, outfile, half_width,
         plt.close(fig)
 
 
+def plot_ga_sky_map(positions, center, outfile, weights=None, nside=32):
+    """
+    Plot a HEALPix sky map of GA member positions in Galactic coords.
+
+    Parameters
+    ----------
+    positions : ndarray
+        Cartesian positions (n, 3) in ICRS.
+    center : array-like
+        Observer location in ICRS Cartesian (same units as positions).
+    outfile : Path
+        Output image path.
+    weights : array-like, optional
+        Weights per position (e.g., masses). If None, use unity.
+    nside : int, optional
+        HEALPix nside.
+    """
+    weights = np.ones(positions.shape[0], dtype=float) if weights is None else np.asarray(weights, dtype=float)  # noqa
+    r, ell, b = flowi.cartesian_icrs_to_galactic_spherical(positions, center)
+    theta = np.deg2rad(90.0 - b)
+    phi = np.deg2rad(ell % 360.0)
+    pix = hp.ang2pix(nside, theta, phi)
+    npix = hp.nside2npix(nside)
+    wsum = np.bincount(pix, weights=weights, minlength=npix)
+    cnt = np.bincount(pix, minlength=npix)
+    m = np.divide(
+        wsum, cnt, out=np.full_like(wsum, np.nan, dtype=float), where=cnt > 0)
+    with plt.style.context("science"):
+        hp.mollview(m, title="", unit="mean weight", cbar=True)
+        plt.savefig(outfile, dpi=300, bbox_inches="tight")
+        plt.close()
+
+
 def main():
     center_sigma = 4.0
     plot_sigma = 2.0
-    half_width = 100.0
+    half_width = 90
     out_dir = results_root / "GA_plots"
     cluster_file = results_root / "manticore_voxel_clusters.hdf5"
 
     contour_downsample = 25
     contour_frac = 0.99
     kde_grid = 50
+    show_scatter = False
+    box_center = None
 
     ga_file = results_root / "GA_analysis.hdf5"
     if out_dir.exists():
@@ -207,20 +257,17 @@ def main():
     cube_sum = None
     n_used = 0
     print(f"Found center at {center} in box of size {box_size} Mpc/h")
+    box_center = np.full(3, box_size / 2.0)
 
     # Stack GA-member voxel positions across realizations
     stacked_positions, n_pos_fields = collect_ga_member_positions(
         cluster_file, ga_file, center_sigma)
 
-    pos_out = out_dir / f"GA_member_positions_sigma{center_sigma:.1f}.npy"
-    np.save(pos_out, stacked_positions)
-    print(
-        f"Saved stacked GA member positions ({stacked_positions.shape[0]} rows) "  # noqa
-        f"from {n_pos_fields} fields to {pos_out}"
-    )
-
-    for fid in field_ids[:1]:
+    resolution = None
+    for fid in field_ids[:5]:
         density = flowi.ManticoreLoader(data_root, fid).load_density_field()
+        if resolution is None:
+            resolution = density.shape[0]
         if plot_sigma > 0.0:
             density = flowi.smooth_scalar_field_gaussian(
                 density, box_size, plot_sigma
@@ -230,15 +277,18 @@ def main():
             cube_sum = np.zeros_like(cube, dtype=float)
         cube_sum += cube
         n_used += 1
+        print(f"Processed field {fid}")
 
     cube_mean = cube_sum / n_used
     proj_yz, proj_xz, proj_xy = project_cube(cube_mean)
 
     # Scatter overlays: keep points within the displayed cube
-    rel = stacked_positions - center
-    rel = (rel + box_size / 2) % box_size - box_size / 2
-    mask_pts = np.all(np.abs(rel) <= half_width, axis=1)
-    rel = rel[mask_pts]
+    box_center = np.full(3, box_size / 2.0)
+    rel_center = stacked_positions - center
+    rel_center = (rel_center + box_size / 2) % box_size - box_size / 2
+    mask_pts = np.all(np.abs(rel_center) <= half_width, axis=1)
+    rel_center = rel_center[mask_pts]
+    rel_box = stacked_positions[mask_pts] - box_center
 
     # 3D KDE evaluated on a grid, then projected
     def kde_projection(points):
@@ -247,6 +297,7 @@ def main():
         if contour_downsample > 1 and points.shape[0] > contour_downsample:
             points = points[::contour_downsample]
         kde = gaussian_kde(points.T)
+        print(f"Evaluating 3D KDE on grid {kde_grid}^3 ...")
         grid = np.linspace(-half_width, half_width, kde_grid)
         xg, yg, zg = np.meshgrid(grid, grid, grid, indexing="ij")
         coords = np.vstack([xg.ravel(), yg.ravel(), zg.ravel()])
@@ -259,7 +310,8 @@ def main():
         lvl_xy = contour_level_for_fraction(proj_xy, frac=contour_frac)
         return proj_yz, proj_xz, proj_xy, lvl_yz, lvl_xz, lvl_xy
 
-    dens_yz, dens_xz, dens_xy, lvl_yz, lvl_xz, lvl_xy = kde_projection(rel)
+    dens_yz, dens_xz, dens_xy, lvl_yz, lvl_xz, lvl_xy = kde_projection(
+        rel_center)
 
     base = out_dir / (
         f"GA_projection_center{center_sigma:.1f}_plot{plot_sigma:.1f}"
@@ -268,23 +320,63 @@ def main():
     save_projection(
         proj_yz, ("y", "z"),
         base.with_name(f"{base.name}_yz.png"), half_width,
-        scatter=rel[:, [1, 2]],
+        scatter=rel_box[:, [1, 2]] if show_scatter else None,
         contour_data=dens_yz,
-        contour_level=lvl_yz
+        contour_level=lvl_yz,
+        offset=(center[1] - box_center[1], center[2] - box_center[2]),
+        observer=(0.0, 0.0),
+        ga_center=(center[1] - box_center[1], center[2] - box_center[2])
     )
     save_projection(
         proj_xz, ("x", "z"),
         base.with_name(f"{base.name}_xz.png"), half_width,
-        scatter=rel[:, [0, 2]],
+        scatter=rel_box[:, [0, 2]] if show_scatter else None,
         contour_data=dens_xz,
-        contour_level=lvl_xz
+        contour_level=lvl_xz,
+        offset=(center[0] - box_center[0], center[2] - box_center[2]),
+        observer=(0.0, 0.0),
+        ga_center=(center[0] - box_center[0], center[2] - box_center[2])
     )
     save_projection(
         proj_xy, ("x", "y"),
         base.with_name(f"{base.name}_xy.png"), half_width,
-        scatter=rel[:, [0, 1]],
+        scatter=rel_box[:, [0, 1]] if show_scatter else None,
         contour_data=dens_xy,
-        contour_level=lvl_xy
+        contour_level=lvl_xy,
+        offset=(center[0] - box_center[0], center[1] - box_center[1]),
+        observer=(0.0, 0.0),
+        ga_center=(center[0] - box_center[0], center[1] - box_center[1])
+    )
+
+    # Sky map of stacked positions in Galactic coordinates
+    sky_out = out_dir / f"GA_sky_sigma{center_sigma:.1f}.png"
+    plot_ga_sky_map(
+        stacked_positions, box_center, sky_out,
+        weights=None, nside=16
+    )
+    # Sky map of mean density within spherical cut about observer
+    if resolution is None:
+        resolution = cube_mean.shape[0]
+    idx_cube = cube_indices(center, half_width, box_size, resolution)
+    voxel = box_size / resolution
+    ixg, iyg, izg = np.meshgrid(idx_cube[0], idx_cube[1], idx_cube[2],
+                                indexing="ij")
+    pos_cube = np.stack(
+        [
+            (ixg + 0.5) * voxel,
+            (iyg + 0.5) * voxel,
+            (izg + 0.5) * voxel,
+        ],
+        axis=-1
+    ).reshape(-1, 3)
+    weights_cube = cube_mean.ravel()
+    obs = box_center
+    dists = np.sqrt(((pos_cube - obs) ** 2).sum(axis=1))
+    mask_sphere = dists <= half_width
+    sky_density_out = out_dir / f"GA_sky_density_sigma{center_sigma:.1f}.png"
+    plot_ga_sky_map(
+        pos_cube[mask_sphere], obs, sky_density_out,
+        weights=weights_cube[mask_sphere], nside=32
     )
     print(f"Used {n_used} realizations.")
     print(f"Median centroid (Mpc/h): {center}")
