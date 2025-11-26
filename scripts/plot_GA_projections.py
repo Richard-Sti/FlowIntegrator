@@ -14,19 +14,19 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Minimal GA projection script."""
 
+from functools import lru_cache
 from shutil import rmtree
 
+import astropy.units as u
 import flowi
+import healpy as hp
 import matplotlib.pyplot as plt
 import numpy as np
 import scienceplots  # noqa
-import healpy as hp
-from scipy.stats import gaussian_kde
-from scipy.interpolate import RegularGridInterpolator
-from h5py import File
 from astropy.coordinates import SkyCoord
 from astropy.cosmology import FlatLambdaCDM
-import astropy.units as u
+from h5py import File
+from scipy.interpolate import RegularGridInterpolator
 
 from config import data_root, results_root
 
@@ -54,6 +54,28 @@ def matched_centers(ga_file, sigma):
     center = np.median(centers, axis=0)
     print(f"Found {centers.shape[0]} matched centroids; median={center}")
     return center, field_ids, box_size
+
+
+def _observer_key(observer):
+    obs = np.asarray(observer, dtype=float)
+    return tuple(obs.tolist())
+
+
+@lru_cache(maxsize=None)
+def initial_positions_grid(box_size, resolution, observer_key, max_distance):
+    observer = np.asarray(observer_key, dtype=float)
+    grid = np.asarray(
+        flowi.create_initial_positions(
+            box_size,
+            resolution,
+            N=None,
+            observer_location=observer,
+            max_distance=max_distance,
+            verbose=False,
+        )
+    )
+    grid.setflags(write=False)
+    return grid
 
 
 def cube_indices(center, half_width, box_size, resolution):
@@ -95,7 +117,8 @@ def collect_ga_member_positions(cluster_file, ga_file, sigma):
     Returns
     -------
     tuple
-        (positions, n_fields_used) where positions is (N, 3) array.
+        (positions_list, n_fields_used) where positions_list is a list of
+        per-field (n_i, 3) arrays.
     """
     positions = []
     used = 0
@@ -122,22 +145,20 @@ def collect_ga_member_positions(cluster_file, ga_file, sigma):
             box_size = float(g_ga.attrs["box_size"])
             resolution = int(g_ga.attrs["resolution"])
             observer = np.full(3, box_size / 2.0, dtype=float)
-            x0 = flowi.create_initial_positions(
+            x0_full = initial_positions_grid(
                 box_size,
                 resolution,
-                N=None,
-                observer_location=observer,
-                max_distance=max_distance if max_distance > 0 else None,
-                verbose=False,
+                _observer_key(observer),
+                max_distance if max_distance > 0 else None,
             )
-            x0 = np.asarray(x0)[members]
+            x0 = np.asarray(x0_full)[members]
             positions.append(x0)
             used += 1
 
     if not positions:
         raise RuntimeError(f"No GA members found for sigma={sigma}")
 
-    return np.vstack(positions), used
+    return positions, used
 
 
 def contour_level_for_fraction(arr, frac=0.95):
@@ -155,9 +176,10 @@ def contour_level_for_fraction(arr, frac=0.95):
 
 
 def save_projection(proj, labels, outfile, half_width,
-                    scatter=None, contour_data=None, contour_level=None,
+                    scatter=None, contours_list=None,
                     offset=None, observer=None, ga_center=None,
-                    cluster_data=None, in_ga=None, box_center=None, ax=None):
+                    cluster_data=None, in_ga=None, box_center=None, ax=None,
+                    distance_limit=75.0):
     if offset is None:
         offset = (0.0, 0.0)
     extent = (
@@ -198,24 +220,35 @@ def save_projection(proj, labels, outfile, half_width,
     if ga_center is not None:
         ax.plot(ga_center[0], ga_center[1], "rx", ms=1, alpha=0.8,
                 label="GA center")
-    if contour_data is not None and contour_level is not None:
-        ax.contour(
-            contour_data.T,
-            levels=[contour_level],
-            colors="red",
-            linewidths=0.5,
-            origin="lower",
-            extent=extent,
-        )
+    if contours_list is not None:
+        for contour_data, contour_level in contours_list:
+            if contour_data is not None and contour_level is not None:
+                ax.contour(
+                    contour_data.T,
+                    levels=[contour_level],
+                    colors="red",
+                    linewidths=0.5,
+                    origin="lower",
+                    extent=extent,
+                    alpha=0.3
+                )
     # Plot clusters
-    if cluster_data is not None and in_ga is not None and box_center is not None:  # noqa
+    has_cluster_data = (cluster_data is not None and in_ga is not None and
+                        box_center is not None)
+    if has_cluster_data:
+        distances = cluster_data.get('distances', None)
+        if distances is not None:
+            within_distance = distances <= distance_limit
+        else:
+            within_distance = np.ones_like(in_ga, dtype=bool)
+
         # Determine which axes we're plotting (x=0, y=1, z=2)
         axis_map = {'x': 0, 'y': 1, 'z': 2}
         idx_x = axis_map[labels[0]]
         idx_y = axis_map[labels[1]]
 
         # Plot non-GA clusters (in orange)
-        non_ga_nearby = ~in_ga
+        non_ga_nearby = (~in_ga) & within_distance
         if non_ga_nearby.any():
             cluster_pos = cluster_data['positions'][non_ga_nearby]
             cluster_names = [
@@ -229,24 +262,34 @@ def save_projection(proj, labels, outfile, half_width,
                 - box_center[[idx_x, idx_y]])
 
             # Check if within subbox boundaries
-            in_bounds = (
-                (cluster_2d[:, 0] >= extent[0]) & (cluster_2d[:, 0] <= extent[1]) &  # noqa
-                (cluster_2d[:, 1] >= extent[2]) & (cluster_2d[:, 1] <= extent[3])    # noqa
-            )
+            x_in = ((cluster_2d[:, 0] >= extent[0]) &
+                    (cluster_2d[:, 0] <= extent[1]))
+            y_in = ((cluster_2d[:, 1] >= extent[2]) &
+                    (cluster_2d[:, 1] <= extent[3]))
+            in_bounds = x_in & y_in
 
             # Plot markers
             if in_bounds.any():
                 ax.scatter(
                     cluster_2d[in_bounds, 0], cluster_2d[in_bounds, 1],
-                    s=7.5, c='tomato', marker='o', zorder=10,
+                    s=7.5, c='#7FFF00', marker='o', zorder=10,
                     linewidths=0)
+                for i, (name, is_in) in enumerate(zip(cluster_names,
+                                                      in_bounds)):
+                    if not is_in:
+                        continue
+                    ax.text(
+                        cluster_2d[i, 0] + 2, cluster_2d[i, 1] + 2,
+                        name, fontsize='xx-small', color='#7FFF00',
+                        ha='left', va='bottom', weight='bold')
 
         # Plot GA clusters (in cyan)
-        if in_ga.any():
-            cluster_pos = cluster_data['positions'][in_ga]
+        ga_mask = in_ga & within_distance
+        if ga_mask.any():
+            cluster_pos = cluster_data['positions'][ga_mask]
             cluster_names = [
                 cluster_data['names'][i]
-                for i in range(len(in_ga)) if in_ga[i]
+                for i in range(len(ga_mask)) if ga_mask[i]
             ]
 
             # Extract 2D coordinates relative to box center
@@ -255,32 +298,26 @@ def save_projection(proj, labels, outfile, half_width,
                 - box_center[[idx_x, idx_y]])
 
             # Check if within subbox boundaries
-            in_bounds = (
-                (cluster_2d[:, 0] >= extent[0]) & (cluster_2d[:, 0] <= extent[1]) &  # noqa
-                (cluster_2d[:, 1] >= extent[2]) & (cluster_2d[:, 1] <= extent[3])    # noqa
-            )
+            x_in = ((cluster_2d[:, 0] >= extent[0]) &
+                    (cluster_2d[:, 0] <= extent[1]))
+            y_in = ((cluster_2d[:, 1] >= extent[2]) &
+                    (cluster_2d[:, 1] <= extent[3]))
+            in_bounds = x_in & y_in
 
             # Plot markers
             if in_bounds.any():
                 ax.scatter(
                     cluster_2d[in_bounds, 0], cluster_2d[in_bounds, 1],
-                    s=7.5, c='cyan', marker='o', zorder=10, linewidths=0)
+                    s=7.5, c='#00FFFF', marker='o', zorder=10, linewidths=0)
 
                 # Add labels
                 for i, (name, is_in) in enumerate(zip(cluster_names,
                                                       in_bounds)):
                     if not is_in:
                         continue
-                    name_l = name.lower()
-                    if name.startswith('Shapley'):
-                        short_name = name
-                    elif '(' in name and 'pavo' not in name_l:
-                        short_name = name.split('(')[0].strip()
-                    else:
-                        short_name = name.split()[0]
                     ax.text(
                         cluster_2d[i, 0] + 2, cluster_2d[i, 1] + 2,
-                        short_name, fontsize='xx-small', color='white',
+                        name, fontsize='xx-small', color='#00FFFF',
                         ha='left', va='bottom', weight='bold')
 
     # Handle colorbar and saving only if we created our own figure
@@ -387,26 +424,27 @@ def check_clusters_in_ga(cluster_data, ga_mask, box_size, resolution):
     ndarray
         Boolean array indicating which clusters are in GA.
     """
-    nx, ny, nz = ga_mask.shape
-    x = (np.arange(nx) + 0.5) * box_size / nx
-    y = (np.arange(ny) + 0.5) * box_size / ny
-    z = (np.arange(nz) + 0.5) * box_size / nz
+    voxel = box_size / float(resolution)
+    idx = np.floor(cluster_data['positions'] / voxel).astype(int) % resolution
+    offsets = np.array([
+        [0, 0, 0],
+        [1, 0, 0],
+        [-1, 0, 0],
+        [0, 1, 0],
+        [0, -1, 0],
+        [0, 0, 1],
+        [0, 0, -1],
+    ], dtype=int)
+    neigh_idx = (idx[:, None, :] + offsets[None, :, :]) % resolution
+    flat = (neigh_idx[:, :, 0] * resolution ** 2 +
+            neigh_idx[:, :, 1] * resolution +
+            neigh_idx[:, :, 2])
+    mask_flat = ga_mask.reshape(-1)
+    return (mask_flat[flat] >= 0.5).any(axis=1)
 
-    # Use nearest neighbor interpolation for binary mask
-    interp = RegularGridInterpolator((x, y, z), ga_mask.astype(float),
-                                     method='nearest', bounds_error=False,
-                                     fill_value=0.0)
 
-    # Sample mask at cluster positions
-    mask_values = interp(cluster_data['positions'])
-
-    # Cluster is in GA if mask value >= 0.5
-    in_ga = mask_values >= 0.5
-
-    return in_ga
-
-
-def create_ga_mask(ga_positions, box_size, resolution, observer, max_distance):
+def create_ga_mask(ga_positions, box_size, resolution, observer, max_distance,
+                   n_fields=None):
     """
     Create a 3D binary mask of GA member voxels.
 
@@ -428,31 +466,23 @@ def create_ga_mask(ga_positions, box_size, resolution, observer, max_distance):
     ndarray
         3D binary mask where 1 = GA member, 0 = not GA.
     """
-    # Create initial positions grid
-    x0 = flowi.create_initial_positions(
-        box_size, resolution, N=None,
-        observer_location=observer,
-        max_distance=max_distance if max_distance > 0 else None,
-        verbose=False
-    )
-    x0 = np.asarray(x0)
-
     # Create binary mask
-    mask = np.zeros(resolution**3, dtype=bool)
+    mask = np.zeros(resolution**3, dtype=float)
 
-    # Find which grid points match GA positions
-    # Use a spatial approach: round positions to voxel indices
+    # Find which grid points match GA positions; accumulate counts
     voxel_size = box_size / resolution
     ga_indices = np.floor(ga_positions / voxel_size).astype(int) % resolution
     ga_flat = (ga_indices[:, 0] * resolution**2 +
                ga_indices[:, 1] * resolution +
                ga_indices[:, 2])
 
-    mask[ga_flat] = True
+    np.add.at(mask, ga_flat, 1.0)
+    if n_fields is not None and n_fields > 0:
+        mask /= float(n_fields)
     return mask.reshape((resolution, resolution, resolution))
 
 
-def plot_zone_of_avoidance(b_min=-10, b_max=10, color='#00A7C7', alpha=0.8):
+def plot_zone_of_avoidance(b_min=-10, b_max=10, color='white', alpha=0.8):
     """
     Plot the Galactic zone of avoidance on current HEALPix map.
 
@@ -490,30 +520,42 @@ def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0):
     max_distance : float
         Maximum distance to plot clusters (Mpc/h).
     """
-    # Calculate distances from observer
-    # distances = np.sqrt(
-    #     ((cluster_data['positions'] - observer) ** 2).sum(axis=1))
-    # within_distance = distances <= max_distance
+    def _label_info(name, theta, phi):
+        name_l = name.lower()
+        short_name = name
+        if name_l.startswith('coma') or 'perseus' in name_l:
+            text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
+            text_theta = theta + np.deg2rad(2.0)
+            va = 'top'
+        else:
+            text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
+            text_theta = theta - np.deg2rad(2.0)
+            va = 'bottom'
+        return short_name, text_theta, text_phi, va
 
-    # # Plot non-GA clusters within distance (in orange)
-    # non_ga_nearby = within_distance & ~in_ga
-    # if non_ga_nearby.any():
-    #     nearby_names = [
-    #         cluster_data['names'][i]
-    #         for i in range(len(in_ga)) if non_ga_nearby[i]]
-    #     nearby_ell = cluster_data['ell'][non_ga_nearby]
-    #     nearby_b = cluster_data['b'][non_ga_nearby]
+    # Plot non-GA clusters within distance (in orange)
+    distances = cluster_data.get('distances', None)
+    if distances is not None:
+        within_distance = distances <= max_distance
+        non_ga_nearby = within_distance & ~in_ga
+        if non_ga_nearby.any():
+            nearby_names = [
+                cluster_data['names'][i]
+                for i in range(len(in_ga)) if non_ga_nearby[i]]
+            nearby_ell = cluster_data['ell'][non_ga_nearby]
+            nearby_b = cluster_data['b'][non_ga_nearby]
 
-    #     theta_nearby = np.deg2rad(90.0 - nearby_b)
-    #     phi_nearby = np.deg2rad(nearby_ell % 360.0)
+            theta_nearby = np.deg2rad(90.0 - nearby_b)
+            phi_nearby = np.deg2rad(nearby_ell % 360.0)
 
-    #     for i, (theta, phi, name) in enumerate(zip(theta_nearby,
-    #                                                phi_nearby,
-    #                                                nearby_names)):
-    #         # Plot marker in orange
-    #         hp.projplot(theta, phi, 'o', markersize=6,
-    #                     markerfacecolor='tomato', markeredgecolor='black',
-    #                     markeredgewidth=0.8, lonlat=False)
+            for theta, phi, name in zip(theta_nearby, phi_nearby, nearby_names):  # noqa
+                hp.projplot(theta, phi, 'o', markersize=6,
+                            markerfacecolor='#7FFF00', markeredgecolor='black',
+                            markeredgewidth=0.8, lonlat=False)
+                short_name, text_theta, text_phi, va = _label_info(
+                    name, theta, phi)
+                hp.projtext(text_theta, text_phi, short_name, lonlat=False,
+                            fontsize='small', color='#7FFF00', ha='left', va=va)
 
     # Plot GA clusters (in cyan)
     ga_cluster_names = [
@@ -529,38 +571,32 @@ def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0):
     for i, (theta, phi, name) in enumerate(zip(theta_clusters,
                                                phi_clusters,
                                                ga_cluster_names)):
-        # Plot marker
         hp.projplot(theta, phi, 'o', markersize=6,
-                    markerfacecolor='cyan', markeredgecolor='black',
+                    markerfacecolor='#00FFFF', markeredgecolor='black',
                     markeredgewidth=0.8, lonlat=False)
 
-        # Add text label - extract cluster name (before parentheses)
-        name_l = name.lower()
-        print(name, name_l)
-        if name_l.startswith('shapley'):
-            short_name = name
-        elif '(' in name:
-            short_name = name.split('(')[0].strip()
-        else:
-            short_name = name.split()[0]  # First word
-
-        # Position text below for Coma/Perseus, above for others
-        if name_l.startswith('coma') or 'perseus' in name_l:
-            text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
-            text_theta = theta + np.deg2rad(2.0)
-            va = 'top'
-        else:
-            text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
-            text_theta = theta - np.deg2rad(2.0)
-            va = 'bottom'
-
+        short_name, text_theta, text_phi, va = _label_info(name, theta, phi)
         hp.projtext(text_theta, text_phi, short_name, lonlat=False,
-                    fontsize='small', color='black', ha='left', va=va)
+                    fontsize='small', color='#00FFFF', ha='left', va=va)
+
+
+def annotate_ga_center_and_clusters(theta_center, phi_center, cluster_data,
+                                    in_ga, observer, max_distance=100.0):
+    hp.projplot(theta_center, phi_center, 'o', markersize=6,
+                markerfacecolor='#00FFFF', markeredgecolor='black',
+                markeredgewidth=0.8, lonlat=False)
+    text_phi_center = (phi_center + np.deg2rad(3.0)) % (2 * np.pi)
+    text_theta_center = theta_center - np.deg2rad(2.0)
+    hp.projtext(text_theta_center, text_phi_center, "GA center",
+                lonlat=False, fontsize='small', color='#00FFFF', ha='left',
+                va='bottom')
+    plot_clusters_on_healpy(cluster_data, in_ga, observer,
+                            max_distance=max_distance)
 
 
 def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
                               Rmax, dr, nside=32, Rmin=0,
-                              unit=r"$\langle \rho \rangle\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$",  # noqa
+                              unit=None,
                               r_power=0,
                               coords=None,
                               highlight_gal=None,
@@ -592,6 +628,9 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
     unit : str, optional
         Unit string for the colorbar.
     """
+    if unit is None:
+        unit = r"$\langle \rho \rangle\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$"
+
     # Use the existing utility
     m = flowi.utils.grid_ngp_projection(
         nside, rho, box_size, np.asarray(observer, dtype=float),
@@ -633,121 +672,141 @@ def main():
     half_width = 90
     nside_map = 128
     out_dir = results_root / "GA_plots"
-    cluster_file = results_root / "manticore_voxel_clusters.hdf5"
 
-    contour_downsample = 25
-    contour_frac = 0.99
-    kde_grid = 50
-    show_scatter = False
-    box_center = None
+    # Load precomputed data
+    fname = (f"GA_precomputed_center{center_sigma:.1f}_"
+             f"plot{plot_sigma:.1f}.hdf5")
+    precomputed_file = results_root / fname
+    print(f"Loading precomputed data from {precomputed_file}")
 
-    ga_file = results_root / "GA_analysis.hdf5"
     if out_dir.exists():
         print(f"Cleaning output directory {out_dir}")
         rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    center, field_ids, box_size = matched_centers(ga_file, center_sigma)
-    cube_sum = None
-    n_used = 0
-    print(f"Found center at {center} in box of size {box_size} Mpc/h")
+    with File(precomputed_file, "r") as h5f:
+        center = h5f.attrs["center"]
+        box_size = h5f.attrs["box_size"]
+        resolution = h5f.attrs["resolution"]
+        Rmax_ga = h5f.attrs["Rmax_ga"]
+        field_ids = h5f["field_ids"][:]
+        density_mean = h5f["density_mean"][:]
+        ga_sky_depth_list = []
+        if "ga_sky_maps" in h5f:
+            for fid in field_ids:
+                fkey = f"field_{fid}"
+                if fkey in h5f["ga_sky_maps"]:
+                    ga_sky_depth_list.append(h5f["ga_sky_maps"][fkey][:])
+        if not ga_sky_depth_list:
+            raise RuntimeError("No GA sky depth maps loaded.")
+        ga_depth_map = np.mean(ga_sky_depth_list, axis=0)
+        ga_depth_std = np.std(ga_sky_depth_list, axis=0)
+        print(f"GA depth map range: [{ga_depth_map.min():.4e}, "
+              f"{ga_depth_map.max():.4e}] Mpc/h")
+        print(f"GA depth std range: [{ga_depth_std.min():.4e}, "
+              f"{ga_depth_std.max():.4e}] Mpc/h")
+
+        # Load GA masks and compute membership probability
+        print("Loading GA masks and computing membership probabilities...")
+        ga_mask_sum = None
+        n_masks = 0
+        for fid in field_ids:
+            fkey = f"field_{fid}"
+            if fkey in h5f["ga_masks"]:
+                mask = h5f["ga_masks"][fkey][:]
+                if ga_mask_sum is None:
+                    ga_mask_sum = np.zeros_like(mask, dtype=float)
+                ga_mask_sum += mask
+                n_masks += 1
+
+        ga_membership = ga_mask_sum / n_masks if n_masks > 0 else None
+        print(f"Computed membership from {n_masks} masks")
+
+        # Load KDE contours from all realizations
+        print("Loading KDE contours from all realizations...")
+        kde_contours_list = []
+        for fid in field_ids:
+            fkey = f"field_{fid}"
+            if fkey in h5f["kde_contours"]:
+                kde_grp = h5f["kde_contours"][fkey]
+                kde_yz = kde_grp["kde_yz"][:]
+                kde_xz = kde_grp["kde_xz"][:]
+                kde_xy = kde_grp["kde_xy"][:]
+                lvl_yz = kde_grp.attrs.get("lvl_yz", None)
+                lvl_xz = kde_grp.attrs.get("lvl_xz", None)
+                lvl_xy = kde_grp.attrs.get("lvl_xy", None)
+                kde_contours_list.append({
+                    "kde_yz": kde_yz,
+                    "kde_xz": kde_xz,
+                    "kde_xy": kde_xy,
+                    "lvl_yz": lvl_yz,
+                    "lvl_xz": lvl_xz,
+                    "lvl_xy": lvl_xy
+                })
+        print(f"Loaded {len(kde_contours_list)} KDE contour sets")
+
+    n_used = len(field_ids)
+    print(f"Center: {center}")
+    print(f"Box size: {box_size}")
+    print(f"Rmax_ga: {Rmax_ga}")
     box_center = np.full(3, box_size / 2.0)
 
-    # Stack GA-member voxel positions across realizations
-    stacked_positions, n_pos_fields = collect_ga_member_positions(
-        cluster_file, ga_file, center_sigma)
-
-    resolution = None
-    density_mean = None
-    for fid in field_ids:
-        density = flowi.ManticoreLoader(data_root, fid).load_density_field()
-        if resolution is None:
-            resolution = density.shape[0]
-        if plot_sigma > 0.0:
-            density = flowi.smooth_scalar_field_gaussian(
-                density, box_size, plot_sigma
-            )
-        cube = extract_cube(density, center, half_width, box_size)
-        if cube_sum is None:
-            cube_sum = np.zeros_like(cube, dtype=float)
-
-        if density_mean is None:
-            density_mean = np.zeros_like(density, dtype=float)
-
-        cube_sum += cube
-        density_mean += density
-        n_used += 1
-        print(f"Processed field {fid}")
-
-    cube_mean = cube_sum / n_used
-    density_mean /= n_used
+    # Extract cube from mean density for projection
+    cube_mean = extract_cube(density_mean, center, half_width, box_size)
     proj_yz, proj_xz, proj_xy = project_cube(cube_mean)
-
-    # Scatter overlays: keep points within the displayed cube
-    box_center = np.full(3, box_size / 2.0)
-    rel_center = stacked_positions - center
-    rel_center = (rel_center + box_size / 2) % box_size - box_size / 2
-    mask_pts = np.all(np.abs(rel_center) <= half_width, axis=1)
-    rel_center = rel_center[mask_pts]
-    rel_box = stacked_positions[mask_pts] - box_center
-
-    # 3D KDE evaluated on a grid, then projected
-    def kde_projection(points):
-        if points.shape[0] < 10:
-            return None, None, None, None, None, None
-        if contour_downsample > 1 and points.shape[0] > contour_downsample:
-            points = points[::contour_downsample]
-        kde = gaussian_kde(points.T)
-        print(f"Evaluating 3D KDE on grid {kde_grid}^3 ...")
-        grid = np.linspace(-half_width, half_width, kde_grid)
-        xg, yg, zg = np.meshgrid(grid, grid, grid, indexing="ij")
-        coords = np.vstack([xg.ravel(), yg.ravel(), zg.ravel()])
-        dens = kde(coords).reshape(kde_grid, kde_grid, kde_grid)
-        proj_yz = dens.sum(axis=0)
-        proj_xz = dens.sum(axis=1)
-        proj_xy = dens.sum(axis=2)
-        lvl_yz = contour_level_for_fraction(proj_yz, frac=contour_frac)
-        lvl_xz = contour_level_for_fraction(proj_xz, frac=contour_frac)
-        lvl_xy = contour_level_for_fraction(proj_xy, frac=contour_frac)
-        return proj_yz, proj_xz, proj_xy, lvl_yz, lvl_xz, lvl_xy
-
-    dens_yz, dens_xz, dens_xy, lvl_yz, lvl_xz, lvl_xy = kde_projection(
-        rel_center)
-
-    # Sky map of mean density within spherical cut about observer using NGP
-    # projection
-    if resolution is None:
-        resolution = cube_mean.shape[0]
 
     voxel = box_size / resolution
 
-    # Compute 95th percentile distance from observer to GA positions
-    distances = np.sqrt(((stacked_positions - box_center) ** 2).sum(axis=1))
-    Rmax_ga = np.percentile(distances, 99.99)
-    print(f"99.99th percentile GA distance from observer: {Rmax_ga:.2f} Mpc/h")
-    print(f"Maximum GA distance from observer: {distances.max():.2f} Mpc/h")
-
-    # Create GA mask and check which clusters are within the GA
-    print("Creating GA mask...")
-    ga_mask = create_ga_mask(stacked_positions, box_size, resolution,
-                             box_center, max_distance=Rmax_ga)
-    print(f"GA mask has {ga_mask.sum()} voxels marked as GA members")
-
-    # Check which clusters are within the GA
+    # Check which clusters are within the GA using membership probability
     print("\nChecking which clusters are within the GA...")
     cluster_file = data_root / "local_clusters.txt"
     cluster_data = read_cluster_catalog(cluster_file, box_size, H0=100.0)
-    in_ga = check_clusters_in_ga(cluster_data, ga_mask, box_size, resolution)
+    theta_clusters = np.deg2rad(90.0 - cluster_data["b"])
+    phi_clusters = np.deg2rad(cluster_data["ell"] % 360.0)
+    pix_clusters = hp.ang2pix(nside_map, theta_clusters, phi_clusters)
+    cluster_depth_mean = ga_depth_map[pix_clusters]
+    cluster_depth_std = ga_depth_std[pix_clusters]
 
-    print(f"\nFound {in_ga.sum()} clusters within the GA "
-          f"(out of {len(in_ga)}):")
-    for i, name in enumerate(cluster_data['names']):
-        if in_ga[i]:
-            dist = cluster_data['distances'][i]
-            ell = cluster_data['ell'][i]
-            b = cluster_data['b'][i]
-            print(f"  {name:25s}  d={dist:6.1f} Mpc/h  "
-                  f"(l={ell:6.1f}°, b={b:6.1f}°)")
+    print("Computing cluster membership fractions...")
+    if ga_membership is not None:
+        membership_fraction = np.zeros(len(cluster_data["names"]))
+        for i in range(len(cluster_data["names"])):
+            pos = cluster_data['positions'][i]
+            # Sample membership at cluster position
+            nx, ny, nz = ga_membership.shape
+            ix = int(np.floor(pos[0] / box_size * nx)) % nx
+            iy = int(np.floor(pos[1] / box_size * ny)) % ny
+            iz = int(np.floor(pos[2] / box_size * nz)) % nz
+            membership_fraction[i] = ga_membership[ix, iy, iz]
+
+        in_ga = membership_fraction > 0.5
+        for i, name in enumerate(cluster_data['names']):
+            print(f"  {name:25s}  membership fraction: "
+                  f"{membership_fraction[i]:.2f}  "
+                  f"d={cluster_data['distances'][i]:6.1f} Mpc/h  "
+                  f"depth={cluster_depth_mean[i]:6.1f}±{cluster_depth_std[i]:6.1f} Mpc/h")
+
+        print(f"\nFound {in_ga.sum()} clusters within the GA "
+              f"(out of {len(in_ga)}):")
+        for i, name in enumerate(cluster_data['names']):
+            if in_ga[i]:
+                dist = cluster_data['distances'][i]
+                ell = cluster_data['ell'][i]
+                b = cluster_data['b'][i]
+                frac = membership_fraction[i]
+                depth_m = cluster_depth_mean[i]
+                depth_s = cluster_depth_std[i]
+                print(f"  {name:25s}  d={dist:6.1f} Mpc/h  "
+                      f"(l={ell:6.1f}°, b={b:6.1f}°)  f={frac:.2f}  "
+                      f"depth={depth_m:6.1f}±{depth_s:6.1f} Mpc/h")
+    else:
+        membership_fraction = np.zeros(len(cluster_data["names"]))
+        in_ga = np.zeros(len(cluster_data["names"]), dtype=bool)
+
+    # Prepare contours from all realizations
+    contours_yz = [(c["kde_yz"], c["lvl_yz"]) for c in kde_contours_list]
+    contours_xz = [(c["kde_xz"], c["lvl_xz"]) for c in kde_contours_list]
+    contours_xy = [(c["kde_xy"], c["lvl_xy"]) for c in kde_contours_list]
 
     base = out_dir / (
         f"GA_projection_center{center_sigma:.1f}_plot{plot_sigma:.1f}"
@@ -761,9 +820,8 @@ def main():
         im0 = save_projection(
             proj_yz, ("y", "z"),
             None, half_width,
-            scatter=rel_box[:, [1, 2]] if show_scatter else None,
-            contour_data=dens_yz,
-            contour_level=lvl_yz,
+            scatter=None,
+            contours_list=contours_yz,
             offset=(center[1] - box_center[1], center[2] - box_center[2]),
             observer=(0.0, 0.0),
             ga_center=(center[1] - box_center[1], center[2] - box_center[2]),
@@ -777,9 +835,8 @@ def main():
         im1 = save_projection(
             proj_xz, ("x", "z"),
             None, half_width,
-            scatter=rel_box[:, [0, 2]] if show_scatter else None,
-            contour_data=dens_xz,
-            contour_level=lvl_xz,
+            scatter=None,
+            contours_list=contours_xz,
             offset=(center[0] - box_center[0], center[2] - box_center[2]),
             observer=(0.0, 0.0),
             ga_center=(center[0] - box_center[0], center[2] - box_center[2]),
@@ -793,9 +850,8 @@ def main():
         im2 = save_projection(
             proj_xy, ("x", "y"),
             None, half_width,
-            scatter=rel_box[:, [0, 1]] if show_scatter else None,
-            contour_data=dens_xy,
-            contour_level=lvl_xy,
+            scatter=None,
+            contours_list=contours_xy,
             offset=(center[0] - box_center[0], center[1] - box_center[1]),
             observer=(0.0, 0.0),
             ga_center=(center[0] - box_center[0], center[1] - box_center[1]),
@@ -834,25 +890,8 @@ def main():
         in_ga=in_ga,
     )
 
-    print("Computing GA fraction map...")
-    ga_fraction_map = flowi.utils.grid_ngp_projection(
-        nside=nside_map,
-        rho=ga_mask.astype(float),
-        boxsize=box_size,
-        observer=box_center,
-        Rmax=Rmax_ga,
-        dr=0.1 * voxel,
-        Rmin=0,
-        coords="icrs->galactic",
-        r_power=0,
-        verbose=True
-    )
-    # Convert fraction to depth by multiplying by Rmax
-    ga_depth_map = ga_fraction_map * Rmax_ga
-    print(f"GA depth map range: [{ga_depth_map.min():.4e}, "
-          f"{ga_depth_map.max():.4e}] Mpc/h")
-
     sky_fraction_out = out_dir / f"GA_fraction_sigma{center_sigma:.1f}.pdf"
+    sky_std_out = out_dir / f"GA_fraction_sigma{center_sigma:.1f}_std.pdf"
 
     # Convert GA center to Galactic coordinates for plotting
     (r_center, ell_center,
@@ -864,42 +903,31 @@ def main():
 
     with plt.style.context("science"):
         hp.mollview(ga_depth_map, title="",
-                    unit=r"GA depth $[h^{-1}\,\mathrm{Mpc}]$",
+                    unit=r"Mean of GA depth $[h^{-1}\,\mathrm{Mpc}]$",
                     cbar=True, cmap="inferno")
 
         # Plot zone of avoidance
         plot_zone_of_avoidance()
 
-        # GA center marker and label
-        hp.projplot(theta_center, phi_center, 'o', markersize=6,
-                    markerfacecolor='white', markeredgecolor='black',
-                    markeredgewidth=0.8, lonlat=False)
-        text_phi_center = (phi_center + np.deg2rad(3.0)) % (2 * np.pi)
-        text_theta_center = theta_center - np.deg2rad(2.0)
-        hp.projtext(text_theta_center, text_phi_center, "GA center",
-                    lonlat=False, fontsize='small', color='black', ha='left',
-                    va='bottom')
-        # Plot clusters
-        plot_clusters_on_healpy(cluster_data, in_ga, box_center)
+        annotate_ga_center_and_clusters(
+            theta_center, phi_center, cluster_data, in_ga, box_center,
+            max_distance=100.0
+        )
         plt.savefig(sky_fraction_out, dpi=450, bbox_inches="tight")
         plt.close()
 
-    # Plot histogram of GA radial distances
-    print("Plotting GA radial distance histogram...")
-    ga_distances = np.sqrt(((stacked_positions - box_center) ** 2).sum(axis=1))
-    hist_out = out_dir / f"GA_distance_histogram_sigma{center_sigma:.1f}.pdf"
-
     with plt.style.context("science"):
-        fig, ax = plt.subplots()
-        ax.hist(ga_distances, bins=50, histtype='stepfilled',)
-        ax.set_xlabel(r"$r ~ [h^{-1}\,\mathrm{Mpc}]$")
-        ax.set_ylabel(r"Count")
-        ax.axvline(Rmax_ga, color='red', linestyle='--', linewidth=1,
-                   label=f'Max: {Rmax_ga:.1f}')
-        ax.legend()
-        fig.tight_layout()
-        fig.savefig(hist_out, dpi=450)
-        plt.close(fig)
+        hp.mollview(ga_depth_std, title="",
+                    unit=r"Std of GA depth $[h^{-1}\,\mathrm{Mpc}]$",
+                    cbar=True, cmap="magma")
+
+        plot_zone_of_avoidance()
+        annotate_ga_center_and_clusters(
+            theta_center, phi_center, cluster_data, in_ga, box_center,
+            max_distance=100.0
+        )
+        plt.savefig(sky_std_out, dpi=450, bbox_inches="tight")
+        plt.close()
 
     print(f"Used {n_used} realizations.")
     print(f"Median centroid (Mpc/h): {center}")
