@@ -26,7 +26,6 @@ import scienceplots  # noqa
 from astropy.coordinates import SkyCoord
 from astropy.cosmology import FlatLambdaCDM
 from h5py import File
-from scipy.interpolate import RegularGridInterpolator
 
 from config import data_root, results_root
 
@@ -555,7 +554,8 @@ def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0):
                 short_name, text_theta, text_phi, va = _label_info(
                     name, theta, phi)
                 hp.projtext(text_theta, text_phi, short_name, lonlat=False,
-                            fontsize='small', color='#7FFF00', ha='left', va=va)
+                            fontsize='small', color='#7FFF00', ha='left',
+                            va=va)
 
     # Plot GA clusters (in cyan)
     ga_cluster_names = [
@@ -667,7 +667,7 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
 
 
 def main():
-    center_sigma = 4.0
+    center_sigma = 2.0
     plot_sigma = 2
     half_width = 90
     nside_map = 128
@@ -784,7 +784,7 @@ def main():
             print(f"  {name:25s}  membership fraction: "
                   f"{membership_fraction[i]:.2f}  "
                   f"d={cluster_data['distances'][i]:6.1f} Mpc/h  "
-                  f"depth={cluster_depth_mean[i]:6.1f}±{cluster_depth_std[i]:6.1f} Mpc/h")
+                  f"depth={cluster_depth_mean[i]:6.1f}±{cluster_depth_std[i]:6.1f} Mpc/h")  # noqa
 
         print(f"\nFound {in_ga.sum()} clusters within the GA "
               f"(out of {len(in_ga)}):")
