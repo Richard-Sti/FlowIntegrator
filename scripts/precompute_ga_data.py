@@ -15,8 +15,8 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Precompute heavy GA analysis data: density fields and GA masks."""
 
+import argparse
 from functools import lru_cache
-
 import flowi
 import numpy as np
 from h5py import File
@@ -57,7 +57,8 @@ def matched_centers(ga_file, sigma):
             box_sizes.append(float(grp.attrs["box_size"]))
             field_ids.append(int(name.split("_")[1]))
     if not centers:
-        raise RuntimeError(f"No matched GA entries for sigma={sigma}")
+        raise RuntimeError(f"No matched GA entries for sigma={sigma}, "
+                           f"filename = {ga_file}")
     centers = np.vstack(centers)
     box_size = float(np.median(box_sizes))
     center = np.median(centers, axis=0)
@@ -126,10 +127,8 @@ def create_ga_mask(ga_positions, box_size, resolution):
     return mask.reshape((resolution, resolution, resolution))
 
 
-def main():
+def main(center_sigma=4.0, plot_sigma=2.0):
     # USER PARAMETERS
-    center_sigma = 4.0
-    plot_sigma = 2
     half_width = 90  # Mpc / h
     contour_downsample = 25
     contour_frac = 0.99
@@ -360,4 +359,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Precompute GA density, masks, and sky maps.")
+    parser.add_argument(
+        "--center-sigma", type=float, default=4.0,
+        help="Smoothing scale used to select the GA center (default: 4.0).")
+    args = parser.parse_args()
+    main(center_sigma=args.center_sigma)
