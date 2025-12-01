@@ -217,8 +217,16 @@ def save_projection(proj, labels, outfile, half_width,
         ax.plot(observer[0], observer[1], "kx", ms=1, alpha=0.8,
                 label="Observer")
     if ga_center is not None:
-        ax.plot(ga_center[0], ga_center[1], "rx", ms=1, alpha=0.8,
-                label="GA center")
+        ax.scatter(
+            [ga_center[0]], [ga_center[1]],
+            s=18, c="#00FFFF", edgecolors='black',
+            linewidths=0.8, zorder=12, label="GA center",
+        )
+        ax.text(
+            ga_center[0] + 4.0, ga_center[1] + 4.0,
+            "GA center", color="#00FFFF", ha="left", va="bottom",
+            fontsize='xx-small', weight="bold", zorder=12
+        )
     if contours_list is not None:
         for contour_data, contour_level in contours_list:
             if contour_data is not None and contour_level is not None:
@@ -582,9 +590,9 @@ def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0):
 
 def annotate_ga_center_and_clusters(theta_center, phi_center, cluster_data,
                                     in_ga, observer, max_distance=100.0):
-    hp.projplot(theta_center, phi_center, 'o', markersize=6,
+    hp.projplot(theta_center, phi_center, 'o', markersize=7.5,
                 markerfacecolor='#00FFFF', markeredgecolor='black',
-                markeredgewidth=0.8, lonlat=False)
+                markeredgewidth=0.8, lonlat=False, zorder=12)
     text_phi_center = (phi_center + np.deg2rad(3.0)) % (2 * np.pi)
     text_theta_center = theta_center - np.deg2rad(2.0)
     hp.projtext(text_theta_center, text_phi_center, "GA center",
@@ -603,7 +611,8 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
                               scatter_positions=None,
                               scatter_center=None,
                               cluster_data=None,
-                              in_ga=None):
+                              in_ga=None,
+                              ga_center_gal=None):
     """
     Project a 3D density grid to a HEALPix map using nearest-grid-point rays.
 
@@ -638,10 +647,23 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
         r_power=r_power,
     )
     with plt.style.context("science"):
-        hp.mollview(m, title="", unit=unit, cbar=True)
+        hp.mollview(m, title="", unit=unit, cbar=True, xsize=1500)
 
         # Plot zone of avoidance
         plot_zone_of_avoidance()
+
+        if ga_center_gal is not None:
+            ell_c, b_c = ga_center_gal
+            theta_c = np.deg2rad(90.0 - b_c)
+            phi_c = np.deg2rad(ell_c % 360.0)
+            hp.projplot(theta_c, phi_c, 'o', markersize=7.5,
+                        markerfacecolor='#00FFFF', markeredgecolor='black',
+                        markeredgewidth=0.8, lonlat=False, zorder=12)
+            text_phi_c = (phi_c + np.deg2rad(3.0)) % (2 * np.pi)
+            text_theta_c = theta_c - np.deg2rad(2.0)
+            hp.projtext(text_theta_c, text_phi_c, "GA center",
+                        lonlat=False, fontsize='small', color='#00FFFF',
+                        ha='left', va='bottom')
 
         if scatter_positions is not None and scatter_center is not None:
             # Convert scatter positions to Galactic coordinates
@@ -667,7 +689,7 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
 
 
 def main():
-    center_sigma = 2.0
+    center_sigma = 4.0
     plot_sigma = 2
     half_width = 90
     nside_map = 128
@@ -812,6 +834,14 @@ def main():
         f"GA_projection_center{center_sigma:.1f}_plot{plot_sigma:.1f}"
     )
 
+    # Convert GA center to Galactic coordinates for plotting
+    (r_center, ell_center,
+     b_center) = flowi.cartesian_icrs_to_galactic_spherical(
+        center[None, :], box_center)
+    print("GA center Galactic (l, b):", ell_center[0], b_center[0])
+    theta_center = np.deg2rad(90.0 - b_center[0])
+    phi_center = np.deg2rad(ell_center[0] % 360.0)
+
     # Create 3-panel figure
     with plt.style.context("science"):
         fig, axes = plt.subplots(1, 3, figsize=(10, 4))
@@ -879,32 +909,25 @@ def main():
         observer=box_center,
         outfile=sky_density_out,
         Rmax=Rmax_ga,
-        dr=0.1 * voxel,
+        dr=0.3 * voxel,
         nside=nside_map,
         Rmin=0,
         r_power=2,
         unit=r"$\langle \rho \rangle\ [h^2\,M_\odot\,\mathrm{kpc}^{-3}]$",
         coords="icrs->galactic",
-        highlight_gal=None,
+        # highlight_gal=(319.62680107, 26.51202313),
         cluster_data=cluster_data,
         in_ga=in_ga,
+        ga_center_gal=(ell_center[0], b_center[0]),
     )
 
     sky_fraction_out = out_dir / f"GA_fraction_sigma{center_sigma:.1f}.pdf"
     sky_std_out = out_dir / f"GA_fraction_sigma{center_sigma:.1f}_std.pdf"
 
-    # Convert GA center to Galactic coordinates for plotting
-    (r_center, ell_center,
-     b_center) = flowi.cartesian_icrs_to_galactic_spherical(
-        center[None, :], box_center)
-    print("GA center Galactic (l, b):", ell_center[0], b_center[0])
-    theta_center = np.deg2rad(90.0 - b_center[0])
-    phi_center = np.deg2rad(ell_center[0] % 360.0)
-
     with plt.style.context("science"):
         hp.mollview(ga_depth_map, title="",
                     unit=r"Mean of GA depth $[h^{-1}\,\mathrm{Mpc}]$",
-                    cbar=True, cmap="inferno")
+                    cbar=True, cmap="inferno", xsize=1500)
 
         # Plot zone of avoidance
         plot_zone_of_avoidance()
@@ -919,7 +942,7 @@ def main():
     with plt.style.context("science"):
         hp.mollview(ga_depth_std, title="",
                     unit=r"Std of GA depth $[h^{-1}\,\mathrm{Mpc}]$",
-                    cbar=True, cmap="magma")
+                    cbar=True, cmap="magma", xsize=1500)
 
         plot_zone_of_avoidance()
         annotate_ga_center_and_clusters(

@@ -22,15 +22,17 @@ from config import data_root, results_root
 
 
 def main():
-    output_file = results_root / "GA_enclosed_mass.hdf5"
+    output_file = results_root / "Norma_enclosed_mass.hdf5"
 
     sigma_target = 0.0
     radii = np.linspace(5.0, 100.0, 100)  # Mpc / h
-    n_rand = 1000
+    n_rand = 11
     rng_seed = 42
-    ga_center = np.array([310.20243187, 327.82457008, 317.06044731])
+    # ga_center = np.array([310.20243187, 327.82457008, 317.06044731])  # GA
+    ga_center = np.array([328.77752601, 318.06299589, 296.20206674])    # Norma
+    # ga_center = np.array([315.55712222, 334.76738225, 318.1171954])   # Cent.
     n_fields = 80  # number of fields to process
-    n_rand_fields = 10  # only compute random profiles for first N fields
+    n_rand_fields = 1  # only compute random profiles for first N fields
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
 

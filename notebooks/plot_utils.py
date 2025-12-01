@@ -22,6 +22,14 @@ from scipy.stats import gaussian_kde
 
 import flowi
 
+COLS = [
+    "#083d77ff",  # regal-navy
+    "#db162fff",  # flag-red
+    "#1b998bff",  # verdigris
+    "#f0f757ff",  # canary-yellow
+    "#440d0fff",  # rich-mahogany
+]
+
 
 def plot_trajectory_galactic(xf_gal, t):
     """
@@ -182,10 +190,11 @@ def plot_multiple_trajectories_galactic(
 def plot_realization_trajectories(realization_trajectories,
                                   smoothing_scales, intg,
                                   observer_location, input_frame,
-                                  panel_height=2., plot_attractors=True,
+                                  panel_height=3., plot_attractors=True,
                                   downsample=10):
     """
-    Visualizes trajectories from multiple field realizations.
+    Visualizes trajectories from multiple field realizations, overplotting
+    all smoothing scales on shared axes with distinct colors.
 
     Parameters
     ----------
@@ -201,7 +210,7 @@ def plot_realization_trajectories(realization_trajectories,
     input_frame : str
         The Astropy frame of the input Cartesian coordinates.
     panel_height : float, optional
-        The height of each individual panel. Default is 3.
+        Height of the figure in inches. Default is 2.
     plot_attractors : bool, optional
         If True, plot the positions of attractors. Default is True.
     downsample : int, optional
@@ -214,22 +223,25 @@ def plot_realization_trajectories(realization_trajectories,
         The matplotlib Figure object containing the plot.
     """
     with plt.style.context("science"):
-        n_sigmas = len(smoothing_scales)
+        colors = np.asarray(COLS)
+        plot_order = np.argsort(smoothing_scales)[::-1]  # largest sigma first
+        r_min = np.inf
         fig, axes = plt.subplots(
-            n_sigmas, 2, figsize=(9, panel_height * n_sigmas),
-            sharex=True, sharey='col'
+            1, 2, figsize=(9, panel_height), sharex=True, sharey='col'
         )
 
-        if n_sigmas == 1:
-            axes = np.array([axes])
+        for rank, sigma_idx in enumerate(plot_order):
+            sigma = smoothing_scales[sigma_idx]
+            sigma_val = int(sigma) if float(sigma).is_integer() else sigma
+            label = "No smoothing" if sigma == 0 else (
+                fr"$\sigma = {sigma_val} ~ h^{{-1}} \mathrm{{Mpc}}$"
+            )
+            color = colors[sigma_idx % colors.size]
+            zorder = rank  # largest smoothing at lowest z-order
 
-        for i, sigma in enumerate(smoothing_scales):
-            ax_row = axes[i]
-            for trajectories in realization_trajectories:
+            for traj_idx, trajectories in enumerate(realization_trajectories):
                 # `trajectories` is the output of `follow_multiple_smoothing`.
                 # It's a list of (t, xf, vmag) for each sigma.
-                # Get the trajectory for the current sigma
-                sigma_idx = smoothing_scales.index(sigma)
                 t, xf, vmag = trajectories[sigma_idx]
 
                 if downsample is not None and downsample > 1:
@@ -238,12 +250,18 @@ def plot_realization_trajectories(realization_trajectories,
                 xf_gal = intg.to_galactic(xf, observer_location, input_frame)
 
                 r = xf_gal[:, 0]
-                rmin = r.min()
                 ell = xf_gal[:, 1]
                 b = xf_gal[:, 2]
+                r_min = min(r_min, np.nanmin(r))
 
-                ax_row[0].plot(r, ell, color='black', alpha=0.5, lw=0.5)
-                ax_row[1].plot(r, b, color='black', alpha=0.5, lw=0.5)
+                axes[0].plot(
+                    r, ell, color=color, alpha=0.6, lw=0.6,
+                    label=label if traj_idx == 0 else None,
+                    zorder=zorder
+                )
+                axes[1].plot(
+                    r, b, color=color, alpha=0.6, lw=0.6, zorder=zorder
+                )
 
         if plot_attractors:
             attractors = {
@@ -252,43 +270,44 @@ def plot_realization_trajectories(realization_trajectories,
                 'Shapley': (138, 312.5, 30.3)
             }
             offset_y = 5
+            offset_y_left = 8
+            offset_y_left_down = -15
+            offset_y_right_down = -10
 
             for i, (name, (r, l, b)) in enumerate(attractors.items()):
-                for j in range(n_sigmas):
-                    axes[j, 0].plot(r, l, 'o', color='darkred', markersize=5)
-                    axes[j, 1].plot(r, b, 'o', color='darkred', markersize=5)
+                axes[0].plot(r, l, 'o', color='black', markersize=5)
+                axes[1].plot(r, b, 'o', color='black', markersize=5)
 
-                    axes[j, 0].text(
-                        r, l + offset_y, name, color='black',
-                        ha='center', va='bottom', fontsize=8,
-                        bbox=dict(boxstyle="round,pad=0.3", fc="white",
-                                  lw=0, alpha=0.7)
-                    )
-                    axes[j, 1].text(
-                        r, b + offset_y, name, color='black',
-                        ha='center', va='bottom', fontsize=8,
-                        bbox=dict(boxstyle="round,pad=0.3", fc="white",
-                                  lw=0, alpha=0.7)
-                    )
-
-        for i in range(n_sigmas):
-            axes[i, 0].set_ylabel(r"$\ell ~ [^\circ]$")
-            axes[i, 1].set_ylabel(r"$b ~ [^\circ]$")
-            axes[i, 0].set_xlim(rmin)
-
-            secax = axes[i, 1].secondary_yaxis('right')
-            if smoothing_scales[i] == 0:
-                sigma_label = "No smoothing"
-            else:
-                sigma_label = (
-                    fr"$\sigma = {smoothing_scales[i]} h^{{-1}} \mathrm{{Mpc}}$"  # noqa
+                axes[0].text(
+                    r,
+                    l + (offset_y_left_down
+                         if name == "Great Attractor"
+                         else offset_y_left),
+                    name, color='black',
+                    ha='center', va='bottom',
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                              lw=0, alpha=0.7)
                 )
-            secax.set_ylabel(sigma_label)
-            secax.set_ticks([])
+                axes[1].text(
+                    r,
+                    b + (offset_y_right_down
+                         if name == "Great Attractor"
+                         else offset_y),
+                    name, color='black',
+                    ha='center', va='bottom',
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white",
+                              lw=0, alpha=0.7)
+                )
 
-            if i == n_sigmas - 1:
-                axes[i, 0].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
-                axes[i, 1].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
+        axes[0].set_ylabel(r"$\ell ~ [^\circ]$")
+        axes[1].set_ylabel(r"$b ~ [^\circ]$")
+        axes[0].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
+        axes[1].set_xlabel(r"$r ~ [h^{-1} \mathrm{Mpc}]$")
+        if np.isfinite(r_min):
+            axes[0].set_xlim(left=r_min)
+        legend = axes[0].legend(loc="best")
+        for line in legend.get_lines():
+            line.set_linewidth(1.4)
 
         fig.tight_layout()
         plt.close()
@@ -426,15 +445,15 @@ def plot_mw_streamlines(filepath, smoothing_scales, input_frame='icrs',
     )
 
 
-def plot_ga_enclosed_mass(filepath, fields=None):
+def plot_ga_enclosed_mass(filepaths, fields=None, labels=None):
     """
-    Stack enclosed GA mass profiles across fields and plot median with
-    16/84 percentiles, comparing to random pointings when available.
+    Stack enclosed GA mass profiles across one or more files and plot median
+    with 16/84 percentiles, comparing to random pointings when available.
 
     Parameters
     ----------
-    filepath : str or pathlib.Path
-        Path to the HDF5 file produced by ga_enclosed_mass.py.
+    filepaths : str, pathlib.Path, or sequence
+        One or more HDF5 files produced by ga_enclosed_mass.py.
     fields : array-like of int, optional
         Only plot the specified field indices (matching HDF5 groups
         `field_<idx>`). If None, plot all fields.
@@ -444,9 +463,16 @@ def plot_ga_enclosed_mass(filepath, fields=None):
     matplotlib.figure.Figure
         The matplotlib Figure object containing the plot.
     """
-    filepath = Path(filepath)
-    if not filepath.exists():
-        raise FileNotFoundError(f"File not found: {filepath}")
+    if not isinstance(filepaths, (list, tuple, np.ndarray)):
+        filepaths = [filepaths]
+    filepaths = [Path(fp) for fp in filepaths]
+    if labels is None:
+        labels = [None] * len(filepaths)
+    if len(labels) != len(filepaths):
+        raise ValueError("labels must match length of filepaths")
+    for fp in filepaths:
+        if not fp.exists():
+            raise FileNotFoundError(f"File not found: {fp}")
 
     if fields is not None:
         fields = np.asarray(fields, dtype=int)
@@ -454,38 +480,46 @@ def plot_ga_enclosed_mass(filepath, fields=None):
     else:
         field_names = None
 
-    actual_samples = []
+    actual_per_file = []
     random_samples = []
     found_field_names = set()
-    with h5py.File(filepath, "r") as h5f:
-        if "radii" not in h5f:
-            raise KeyError("Dataset `radii` not found in file.")
-        radii = np.asarray(h5f["radii"], dtype=float)
+    radii = None
+    for fp, label in zip(filepaths, labels):
+        file_actual = []
+        with h5py.File(fp, "r") as h5f:
+            if "radii" not in h5f:
+                raise KeyError(f"Dataset `radii` not found in file: {fp}")
+            fp_radii = np.asarray(h5f["radii"], dtype=float)
+            if radii is None:
+                radii = fp_radii
+            else:
+                if radii.shape != fp_radii.shape or not np.allclose(radii, fp_radii):  # noqa
+                    raise ValueError("Radii mismatch across input files.")
 
-        for key in sorted(h5f.keys()):
-            if key == "radii" or not key.startswith("field_"):
-                continue
-            if field_names is not None and key not in field_names:
-                continue
+            for key in sorted(h5f.keys()):
+                if key == "radii" or not key.startswith("field_"):
+                    continue
+                if field_names is not None and key not in field_names:
+                    continue
 
-            grp = h5f[key]
-            mass_enclosed = np.asarray(grp["mass_enclosed"], dtype=float)
-            actual_samples.append(mass_enclosed[None, :])
-            found_field_names.add(key)
-            if "mass_random" in grp:
-                mass_random = np.asarray(grp["mass_random"], dtype=float)
-                random_samples.append(mass_random)
+                grp = h5f[key]
+                mass_enclosed = np.asarray(grp["mass_enclosed"], dtype=float)
+                file_actual.append(mass_enclosed[None, :])
+                found_field_names.add(key)
+                if "mass_random" in grp:
+                    mass_random = np.asarray(grp["mass_random"], dtype=float)
+                    random_samples.append(mass_random)
+        if file_actual:
+            actual_per_file.append((np.concatenate(file_actual, axis=0),
+                                    label))
 
     if field_names is not None:
         missing = field_names - found_field_names
         if missing:
             raise KeyError(f"Requested fields not found: {sorted(missing)}")
 
-    if not actual_samples:
+    if not actual_per_file:
         raise ValueError("No mass datasets found in the provided file.")
-
-    actual = np.concatenate(actual_samples, axis=0)
-    q16_a, q50_a, q84_a = np.percentile(actual, [16, 50, 84], axis=0)
 
     if random_samples:
         random = np.concatenate(random_samples, axis=0)
@@ -497,22 +531,28 @@ def plot_ga_enclosed_mass(filepath, fields=None):
 
     with plt.style.context("science"):
         fig, ax = plt.subplots()
-        ax.fill_between(radii, q16_a, q84_a, color="tab:blue",
-                        alpha=0.8, label=r"GA $1\sigma$")
+        colors = np.asarray(COLS)
+        for i, (actual, label) in enumerate(actual_per_file):
+            q16_a, q50_a, q84_a = np.percentile(actual, [16, 50, 84], axis=0)
+            color = colors[i % colors.size]
+            base_label = label or "GA"
+            ax.fill_between(radii, q16_a, q84_a, color=color,
+                            alpha=0.5, label=f"{base_label}")
 
         if q16_r is not None:
+            # Plot all bands but only label the 1σ region
             ax.fill_between(radii, q3_r, q997_r, color="tab:gray",
-                            alpha=0.15, label=r"Random $3\sigma$")
+                            alpha=0.15)
             ax.fill_between(radii, q5_r, q95_r, color="tab:gray",
-                            alpha=0.35, label=r"Random $2\sigma$")
+                            alpha=0.25)
             ax.fill_between(radii, q16_r, q84_r, color="tab:gray",
-                            alpha=0.5, label=r"Random $1\sigma$")
+                            alpha=0.4, label="Random")
         ax.set_xlabel(r"$r~[h^{-1} \mathrm{Mpc}]$")
         ax.set_ylabel(r"$M(<r)~[h^{-1} \mathrm{M}_{\odot}]$")
         ax.legend(fontsize="small", loc="upper left")
 
         ax.set_xlim(radii.min(), radii.max())
-        ax.set_ylim(5e13)
+        ax.set_ylim(3e14)
         ax.set_xscale("log")
         ax.set_yscale("log")
 
