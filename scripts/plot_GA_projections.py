@@ -647,7 +647,9 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
         r_power=r_power,
     )
     with plt.style.context("science"):
-        hp.mollview(m, title="", unit=unit, cbar=True, xsize=1500)
+        hp.mollview(
+            m, title="", unit=unit, cbar=True, xsize=1500, format="%.1f"
+        )
 
         # Plot zone of avoidance
         plot_zone_of_avoidance()
@@ -927,7 +929,7 @@ def main():
     with plt.style.context("science"):
         hp.mollview(ga_depth_map, title="",
                     unit=r"Mean of GA depth $[h^{-1}\,\mathrm{Mpc}]$",
-                    cbar=True, cmap="inferno", xsize=1500)
+                    cbar=True, cmap="inferno", xsize=1500, format="%.1f")
 
         # Plot zone of avoidance
         plot_zone_of_avoidance()
@@ -942,7 +944,7 @@ def main():
     with plt.style.context("science"):
         hp.mollview(ga_depth_std, title="",
                     unit=r"Std of GA depth $[h^{-1}\,\mathrm{Mpc}]$",
-                    cbar=True, cmap="magma", xsize=1500)
+                    cbar=True, cmap="magma", xsize=1500, format="%.1f")
 
         plot_zone_of_avoidance()
         annotate_ga_center_and_clusters(
