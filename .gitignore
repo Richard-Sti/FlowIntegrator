@@ -2,6 +2,8 @@ CLAUDE.md
 AGENTS.md
 GEMINI.md
 
+.DS_Store
+
 flowi.egg-info
 venv_flowi
 */__pycache__/
