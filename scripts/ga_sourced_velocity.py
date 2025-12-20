@@ -222,11 +222,11 @@ def plot_velocity_directions(v_ga, v_full, output_file):
     print(f"Saved direction plot to {output_file}")
 
     # Print median directions
-    print(f"\nGA-sourced velocity direction:")
+    print("\nGA-sourced velocity direction:")
     print(f"  Median (l, b): ({np.median(ell_ga):.1f}, {np.median(b_ga):.1f})")
     print(f"  Std (l, b): ({np.std(ell_ga):.1f}, {np.std(b_ga):.1f})")
 
-    print(f"\nFull field velocity direction:")
+    print("\nFull field velocity direction:")
     print(f"  Median (l, b): ({np.median(ell_full):.1f}, "
           f"{np.median(b_full):.1f})")
     print(f"  Std (l, b): ({np.std(ell_full):.1f}, {np.std(b_full):.1f})")
