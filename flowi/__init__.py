@@ -34,12 +34,6 @@ from .utils import (  # noqa: F401
     galactic_to_radec,
 )
 
-from .velocity_convergence import (  # noqa: F401
-    matter_power_spectrum_camb,
-    velocity_sigma_1d_squared_within_radius,
-    expected_velocity_within_radius,
-)
-
 from .linear_theory import (  # noqa: F401
     delta_to_velocity,
     growth_rate,
