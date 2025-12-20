@@ -25,13 +25,13 @@ mkdir -p "$DEST_BASE"
 case "$1" in
     results)
         echo "[INFO] Pulling 'results' from ${SRC_ALIAS}:${SRC_DATA} -> ${DEST_BASE}"
-        rsync -avh --progress -e "ssh" \
+        rsync -avh --partial --progress -e "ssh" \
           "${SRC_ALIAS}:${SRC_DATA}/results" \
           "${DEST_BASE}/"
         ;;
     data)
         echo "[INFO] Pulling 'data' from ${SRC_ALIAS}:${SRC_DATA} -> ${DEST_BASE}"
-        rsync -avh --progress -e "ssh" \
+        rsync -avh --partial --progress -e "ssh" \
           "${SRC_ALIAS}:${SRC_DATA}/data" \
           "${DEST_BASE}/"
         ;;
