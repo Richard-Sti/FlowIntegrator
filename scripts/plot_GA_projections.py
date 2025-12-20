@@ -23,11 +23,24 @@ import healpy as hp
 import matplotlib.pyplot as plt
 import numpy as np
 import scienceplots  # noqa
+from adjustText import adjust_text
 from astropy.coordinates import SkyCoord
 from astropy.cosmology import FlatLambdaCDM
 from h5py import File
 
 from config import data_root, results_root
+
+# Label adjustment parameters
+ARROW_SHRINK_A = 1  # Points to shrink arrow from marker
+ARROW_SHRINK_B = 5  # Points to shrink arrow from text (gap size)
+EXPAND_POINTS = 2.0  # Expansion factor around markers
+EXPAND_TEXT = 5  # Expansion factor around text
+# Offset for non-adjusted labels
+HEALPY_LABEL_OFFSET = 0.02  # Offset in HEALPix projected coordinates
+# Colors
+GA_CENTER_COLOR = 'red'  # Bright blue for GA center
+GA_CLUSTER_COLOR = '#00FFFF'  # Cyan for GA clusters
+NON_GA_CLUSTER_COLOR = '#7FFF00'  # Chartreuse/lime green for non-GA clusters
 
 
 def matched_centers(ga_file, sigma):
@@ -213,20 +226,24 @@ def save_projection(proj, labels, outfile, half_width,
             scatter[:, 0], scatter[:, 1],
             s=2, c="red", alpha=0.3, linewidths=0
         )
+    texts = []
     if observer is not None:
         ax.plot(observer[0], observer[1], "kx", ms=1, alpha=0.8,
                 label="Observer")
     if ga_center is not None:
         ax.scatter(
             [ga_center[0]], [ga_center[1]],
-            s=18, c="#00FFFF", edgecolors='black',
-            linewidths=0.8, zorder=12, label="GA center",
+            s=7.5, c=GA_CENTER_COLOR, edgecolors='black',
+            linewidths=0.8, zorder=12, label="cGA c.p.",
         )
-        ax.text(
-            ga_center[0] + 4.0, ga_center[1] + 4.0,
-            "GA center", color="#00FFFF", ha="left", va="bottom",
-            fontsize='xx-small', weight="bold", zorder=12
+        txt = ax.text(
+            ga_center[0], ga_center[1],
+            "cGA c.p.", color=GA_CENTER_COLOR, ha="center", va="center",
+            fontsize='xx-small', weight="bold", zorder=12,
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='none',
+                      edgecolor='none')
         )
+        texts.append(txt)
     if contours_list is not None:
         for contour_data, contour_level in contours_list:
             if contour_data is not None and contour_level is not None:
@@ -279,16 +296,19 @@ def save_projection(proj, labels, outfile, half_width,
             if in_bounds.any():
                 ax.scatter(
                     cluster_2d[in_bounds, 0], cluster_2d[in_bounds, 1],
-                    s=7.5, c='#7FFF00', marker='o', zorder=10,
+                    s=7.5, c=NON_GA_CLUSTER_COLOR, marker='o', zorder=10,
                     linewidths=0)
                 for i, (name, is_in) in enumerate(zip(cluster_names,
                                                       in_bounds)):
                     if not is_in:
                         continue
-                    ax.text(
-                        cluster_2d[i, 0] + 2, cluster_2d[i, 1] + 2,
-                        name, fontsize='xx-small', color='#7FFF00',
-                        ha='left', va='bottom', weight='bold')
+                    txt = ax.text(
+                        cluster_2d[i, 0], cluster_2d[i, 1],
+                        name, fontsize='xx-small', color=NON_GA_CLUSTER_COLOR,
+                        ha='center', va='center', weight='bold',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='none',
+                                  edgecolor='none'))
+                    texts.append(txt)
 
         # Plot GA clusters (in cyan)
         ga_mask = in_ga & within_distance
@@ -315,17 +335,34 @@ def save_projection(proj, labels, outfile, half_width,
             if in_bounds.any():
                 ax.scatter(
                     cluster_2d[in_bounds, 0], cluster_2d[in_bounds, 1],
-                    s=7.5, c='#00FFFF', marker='o', zorder=10, linewidths=0)
+                    s=7.5, c=GA_CLUSTER_COLOR, marker='o', zorder=10,
+                    linewidths=0)
 
                 # Add labels
                 for i, (name, is_in) in enumerate(zip(cluster_names,
                                                       in_bounds)):
                     if not is_in:
                         continue
-                    ax.text(
-                        cluster_2d[i, 0] + 2, cluster_2d[i, 1] + 2,
-                        name, fontsize='xx-small', color='#00FFFF',
-                        ha='left', va='bottom', weight='bold')
+                    txt = ax.text(
+                        cluster_2d[i, 0], cluster_2d[i, 1],
+                        name, fontsize='xx-small', color=GA_CLUSTER_COLOR,
+                        ha='center', va='center', weight='bold',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='none',
+                                  edgecolor='none'))
+                    texts.append(txt)
+
+    # Adjust text positions to avoid overlaps
+    if texts:
+        adjust_text(texts, ax=ax,
+                    expand_points=(EXPAND_POINTS, EXPAND_POINTS),
+                    expand_text=(EXPAND_TEXT, EXPAND_TEXT),
+                    force_text=(0.5, 0.5),
+                    force_points=(0.5, 0.5),
+                    arrowprops=dict(arrowstyle='-', color='white',
+                                    lw=0.8, alpha=0,
+                                    relpos=(0.5, 0.5),
+                                    shrinkA=ARROW_SHRINK_A,
+                                    shrinkB=ARROW_SHRINK_B))
 
     # Handle colorbar and saving only if we created our own figure
     if own_fig:
@@ -512,7 +549,9 @@ def plot_zone_of_avoidance(b_min=-10, b_max=10, color='white', alpha=0.8):
             lonlat=True, color=color, alpha=alpha, zorder=10)
 
 
-def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0):
+def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0,
+                            ga_center_theta=None, ga_center_phi=None,
+                            adjust_radius_deg=15.0):
     """
     Plot clusters on current HEALPix map.
 
@@ -526,19 +565,20 @@ def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0):
         Observer position.
     max_distance : float
         Maximum distance to plot clusters (Mpc/h).
+    ga_center_theta : float, optional
+        GA center theta coordinate (radians).
+    ga_center_phi : float, optional
+        GA center phi coordinate (radians).
+    adjust_radius_deg : float, optional
+        Only adjust labels within this angular distance from GA center (deg).
+
+    Returns
+    -------
+    list
+        List of matplotlib text objects to be adjusted.
     """
-    def _label_info(name, theta, phi):
-        name_l = name.lower()
-        short_name = name
-        if name_l.startswith('coma') or 'perseus' in name_l:
-            text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
-            text_theta = theta + np.deg2rad(2.0)
-            va = 'top'
-        else:
-            text_phi = (phi + np.deg2rad(5.0)) % (2 * np.pi)
-            text_theta = theta - np.deg2rad(2.0)
-            va = 'bottom'
-        return short_name, text_theta, text_phi, va
+    ax = plt.gca()
+    texts = []
 
     # Plot non-GA clusters within distance (in orange)
     distances = cluster_data.get('distances', None)
@@ -556,14 +596,42 @@ def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0):
             phi_nearby = np.deg2rad(nearby_ell % 360.0)
 
             for theta, phi, name in zip(theta_nearby, phi_nearby, nearby_names):  # noqa
-                hp.projplot(theta, phi, 'o', markersize=6,
-                            markerfacecolor='#7FFF00', markeredgecolor='black',
-                            markeredgewidth=0.8, lonlat=False)
-                short_name, text_theta, text_phi, va = _label_info(
-                    name, theta, phi)
-                hp.projtext(text_theta, text_phi, short_name, lonlat=False,
-                            fontsize='small', color='#7FFF00', ha='left',
-                            va=va)
+                line = hp.projplot(theta, phi, 'o', markersize=6,
+                                   markerfacecolor=NON_GA_CLUSTER_COLOR,
+                                   markeredgecolor='black',
+                                   markeredgewidth=0.8, lonlat=False)
+                # Get projected coordinates from the line object
+                x, y = line[0].get_data()
+
+                # Check if within adjustment radius
+                near_ga = False
+                if ga_center_theta is not None and ga_center_phi is not None:
+                    ang_sep = np.rad2deg(
+                        hp.rotator.angdist([theta, phi],
+                                           [ga_center_theta, ga_center_phi]))
+                    near_ga = ang_sep <= adjust_radius_deg
+
+                if near_ga:
+                    txt = ax.text(x[0], y[0], name, fontsize='small',
+                                  color=NON_GA_CLUSTER_COLOR, ha='center',
+                                  va='center', weight='normal',
+                                  bbox=dict(boxstyle='round,pad=0.3',
+                                            facecolor='none',
+                                            edgecolor='none'))
+                    texts.append(txt)
+                else:
+                    # Offset for better visual separation (HEALPix coords)
+                    # Special positioning for Perseus and Coma (bottom-right)
+                    if 'perseus' in name.lower() or 'coma' in name.lower():
+                        ax.text(x[0] + HEALPY_LABEL_OFFSET,
+                                y[0] - HEALPY_LABEL_OFFSET, name,
+                                fontsize='small', color=NON_GA_CLUSTER_COLOR,
+                                ha='left', va='top', weight='normal')
+                    else:
+                        ax.text(x[0] + HEALPY_LABEL_OFFSET,
+                                y[0] + HEALPY_LABEL_OFFSET, name,
+                                fontsize='small', color=NON_GA_CLUSTER_COLOR,
+                                ha='left', va='bottom', weight='normal')
 
     # Plot GA clusters (in cyan)
     ga_cluster_names = [
@@ -576,30 +644,83 @@ def plot_clusters_on_healpy(cluster_data, in_ga, observer, max_distance=100.0):
     phi_clusters = np.deg2rad(ga_cluster_ell % 360.0)
 
     # Plot each cluster
-    for i, (theta, phi, name) in enumerate(zip(theta_clusters,
-                                               phi_clusters,
-                                               ga_cluster_names)):
-        hp.projplot(theta, phi, 'o', markersize=6,
-                    markerfacecolor='#00FFFF', markeredgecolor='black',
-                    markeredgewidth=0.8, lonlat=False)
+    for theta, phi, name in zip(theta_clusters, phi_clusters,
+                                ga_cluster_names):
+        line = hp.projplot(theta, phi, 'o', markersize=6,
+                           markerfacecolor=GA_CLUSTER_COLOR,
+                           markeredgecolor='black',
+                           markeredgewidth=0.8, lonlat=False)
+        # Get projected coordinates from the line object
+        x, y = line[0].get_data()
 
-        short_name, text_theta, text_phi, va = _label_info(name, theta, phi)
-        hp.projtext(text_theta, text_phi, short_name, lonlat=False,
-                    fontsize='small', color='#00FFFF', ha='left', va=va)
+        # Check if within adjustment radius
+        near_ga = False
+        if ga_center_theta is not None and ga_center_phi is not None:
+            ang_sep = np.rad2deg(
+                hp.rotator.angdist([theta, phi],
+                                   [ga_center_theta, ga_center_phi]))
+            near_ga = ang_sep <= adjust_radius_deg
+
+        if near_ga:
+            txt = ax.text(x[0], y[0], name, fontsize='small',
+                          color=GA_CLUSTER_COLOR,
+                          ha='center', va='center', weight='normal',
+                          bbox=dict(boxstyle='round,pad=0.3',
+                                    facecolor='none', edgecolor='none'))
+            texts.append(txt)
+        else:
+            # Offset for better visual separation (HEALPix coords)
+            # Special positioning for Perseus and Coma (bottom-right)
+            if 'perseus' in name.lower() or 'coma' in name.lower():
+                ax.text(x[0] + HEALPY_LABEL_OFFSET, y[0] - HEALPY_LABEL_OFFSET,
+                        name, fontsize='small', color=GA_CLUSTER_COLOR,
+                        ha='left', va='top', weight='normal')
+            else:
+                ax.text(x[0] + HEALPY_LABEL_OFFSET, y[0] + HEALPY_LABEL_OFFSET,
+                        name, fontsize='small', color=GA_CLUSTER_COLOR,
+                        ha='left', va='bottom', weight='normal')
+
+    return texts
 
 
 def annotate_ga_center_and_clusters(theta_center, phi_center, cluster_data,
-                                    in_ga, observer, max_distance=100.0):
-    hp.projplot(theta_center, phi_center, 'o', markersize=7.5,
-                markerfacecolor='#00FFFF', markeredgecolor='black',
-                markeredgewidth=0.8, lonlat=False, zorder=12)
-    text_phi_center = (phi_center + np.deg2rad(3.0)) % (2 * np.pi)
-    text_theta_center = theta_center - np.deg2rad(2.0)
-    hp.projtext(text_theta_center, text_phi_center, "GA center",
-                lonlat=False, fontsize='small', color='#00FFFF', ha='left',
-                va='bottom')
-    plot_clusters_on_healpy(cluster_data, in_ga, observer,
-                            max_distance=max_distance)
+                                    in_ga, observer, max_distance=100.0,
+                                    adjust_radius_deg=15.0):
+    """
+    Annotate GA center and clusters on HEALPix map.
+
+    Parameters
+    ----------
+    adjust_radius_deg : float, optional
+        Only adjust labels within this angular distance from GA center (deg).
+
+    Returns
+    -------
+    list
+        List of matplotlib text objects.
+    """
+    ax = plt.gca()
+    line = hp.projplot(theta_center, phi_center, 'o', markersize=6,
+                       markerfacecolor=GA_CENTER_COLOR,
+                       markeredgecolor='black', markeredgewidth=0.8,
+                       lonlat=False, zorder=12)
+
+    # Add GA center label - get projected coordinates from line object
+    x, y = line[0].get_data()
+    txt_center = ax.text(x[0], y[0], "cGA c.p.", fontsize='small',
+                         color=GA_CENTER_COLOR, ha='center', va='center',
+                         weight='normal',
+                         bbox=dict(boxstyle='round,pad=0.3',
+                                   facecolor='none', edgecolor='none'))
+
+    texts = plot_clusters_on_healpy(
+        cluster_data, in_ga, observer,
+        max_distance=max_distance,
+        ga_center_theta=theta_center,
+        ga_center_phi=phi_center,
+        adjust_radius_deg=adjust_radius_deg)
+    texts.append(txt_center)
+    return texts
 
 
 def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
@@ -654,18 +775,26 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
         # Plot zone of avoidance
         plot_zone_of_avoidance()
 
+        texts = []
+        theta_c = None
+        phi_c = None
         if ga_center_gal is not None:
             ell_c, b_c = ga_center_gal
             theta_c = np.deg2rad(90.0 - b_c)
             phi_c = np.deg2rad(ell_c % 360.0)
-            hp.projplot(theta_c, phi_c, 'o', markersize=7.5,
-                        markerfacecolor='#00FFFF', markeredgecolor='black',
-                        markeredgewidth=0.8, lonlat=False, zorder=12)
-            text_phi_c = (phi_c + np.deg2rad(3.0)) % (2 * np.pi)
-            text_theta_c = theta_c - np.deg2rad(2.0)
-            hp.projtext(text_theta_c, text_phi_c, "GA center",
-                        lonlat=False, fontsize='small', color='#00FFFF',
-                        ha='left', va='bottom')
+            line = hp.projplot(theta_c, phi_c, 'o', markersize=6,
+                               markerfacecolor=GA_CENTER_COLOR,
+                               markeredgecolor='black',
+                               markeredgewidth=0.8, lonlat=False, zorder=12)
+            ax = plt.gca()
+            # Get projected coordinates from line object
+            x, y = line[0].get_data()
+            txt = ax.text(x[0], y[0], "cGA c.p.", fontsize='small',
+                          color=GA_CENTER_COLOR, ha='center', va='center',
+                          weight='normal',
+                          bbox=dict(boxstyle='round,pad=0.3',
+                                    facecolor='none', edgecolor='none'))
+            texts.append(txt)
 
         if scatter_positions is not None and scatter_center is not None:
             # Convert scatter positions to Galactic coordinates
@@ -684,14 +813,31 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
                         lonlat=False)
 
         if cluster_data is not None and in_ga is not None:
-            plot_clusters_on_healpy(cluster_data, in_ga, observer)
+            cluster_texts = plot_clusters_on_healpy(
+                cluster_data, in_ga, observer,
+                ga_center_theta=theta_c, ga_center_phi=phi_c,
+                adjust_radius_deg=25.0)
+            texts.extend(cluster_texts)
+
+        # Adjust text positions to avoid overlaps
+        if texts:
+            adjust_text(texts,
+                        expand_points=(EXPAND_POINTS, EXPAND_POINTS),
+                        expand_text=(EXPAND_TEXT, EXPAND_TEXT),
+                        force_text=(0.5, 0.5),
+                        force_points=(0.5, 0.5),
+                        arrowprops=dict(arrowstyle='-', color='white',
+                                        lw=1., alpha=0,
+                                        relpos=(0.5, 0.5),
+                                        shrinkA=ARROW_SHRINK_A,
+                                        shrinkB=ARROW_SHRINK_B))
 
         plt.savefig(outfile, dpi=450, bbox_inches="tight")
         plt.close()
 
 
 def main():
-    center_sigma = 4.0
+    center_sigma = 3.0
     plot_sigma = 2
     half_width = 90
     nside_map = 128
@@ -934,10 +1080,21 @@ def main():
         # Plot zone of avoidance
         plot_zone_of_avoidance()
 
-        annotate_ga_center_and_clusters(
+        texts = annotate_ga_center_and_clusters(
             theta_center, phi_center, cluster_data, in_ga, box_center,
             max_distance=100.0
         )
+        if texts:
+            adjust_text(texts,
+                        expand_points=(EXPAND_POINTS, EXPAND_POINTS),
+                        expand_text=(EXPAND_TEXT, EXPAND_TEXT),
+                        force_text=(0.5, 0.5),
+                        force_points=(0.5, 0.5),
+                        arrowprops=dict(arrowstyle='-', color='white',
+                                        lw=0.8, alpha=0,
+                                        relpos=(0.5, 0.5),
+                                        shrinkA=ARROW_SHRINK_A,
+                                        shrinkB=ARROW_SHRINK_B))
         plt.savefig(sky_fraction_out, dpi=450, bbox_inches="tight")
         plt.close()
 
@@ -947,10 +1104,21 @@ def main():
                     cbar=True, cmap="magma", xsize=1500, format="%.1f")
 
         plot_zone_of_avoidance()
-        annotate_ga_center_and_clusters(
+        texts = annotate_ga_center_and_clusters(
             theta_center, phi_center, cluster_data, in_ga, box_center,
             max_distance=100.0
         )
+        if texts:
+            adjust_text(texts,
+                        expand_points=(EXPAND_POINTS, EXPAND_POINTS),
+                        expand_text=(EXPAND_TEXT, EXPAND_TEXT),
+                        force_text=(0.5, 0.5),
+                        force_points=(0.5, 0.5),
+                        arrowprops=dict(arrowstyle='-', color='white',
+                                        lw=0.8, alpha=0,
+                                        relpos=(0.5, 0.5),
+                                        shrinkA=ARROW_SHRINK_A,
+                                        shrinkB=ARROW_SHRINK_B))
         plt.savefig(sky_std_out, dpi=450, bbox_inches="tight")
         plt.close()
 
