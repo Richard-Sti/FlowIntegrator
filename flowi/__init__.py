@@ -16,8 +16,26 @@
 
 __version__ = "0.1.0"
 
-from .integrator import Integrator                                              # noqa
-from .utils import (                                                            # noqa
-    fprint, load_and_prepare_velocity_field,                                    # noqa
-    create_initial_positions,                                                   # noqa
-    )                                                                           # noqa
+from .apertures import SphericalIntegrator  # noqa
+from .integrator import Integrator, TrajectoryFollower  # noqa: F401
+from .loaders import (  # noqa: F401
+    ManticoreLoader,
+    Carrick2015Loader,
+)
+from .utils import (  # noqa: F401
+    fprint,
+    create_initial_positions,
+    smooth_velocity_field_gaussian,
+    smooth_scalar_field_gaussian,
+    cartesian_icrs_to_galactic_spherical,
+    cartesian_icrs_to_supergalactic_spherical,
+    grid_ngp_projection,
+    radec_to_galactic,
+    galactic_to_radec,
+)
+
+from .linear_theory import (  # noqa: F401
+    delta_to_velocity,
+    growth_rate,
+    hubble_parameter,
+)
