@@ -188,8 +188,6 @@ def compute_observer_velocity_vs_radius(delta, boxsize, observer_pos, radii,
     dz = z - observer_pos[2]
     dist = np.sqrt(dx**2 + dy**2 + dz**2)
 
-    center_idx = N // 2
-
     if cumulative:
         velocities = np.zeros((len(radii), 3))
 
@@ -197,9 +195,9 @@ def compute_observer_velocity_vs_radius(delta, boxsize, observer_pos, radii,
             delta_masked = delta.copy()
             delta_masked[dist > radius] = 0.0
 
-            v_field = flowi.delta_to_velocity(
-                delta_masked, boxsize, Omega_m, h, a, pad_fraction)
-            velocities[i] = v_field[:, center_idx, center_idx, center_idx]
+            velocities[i] = flowi.delta_to_velocity(
+                delta_masked, boxsize, Omega_m, h, a, pad_fraction,
+                center_only=True)
     else:
         n_bins = len(radii) - 1
         velocities = np.zeros((n_bins, 3))
@@ -209,9 +207,9 @@ def compute_observer_velocity_vs_radius(delta, boxsize, observer_pos, radii,
             delta_masked = delta.copy()
             delta_masked[(dist < r_min) | (dist > r_max)] = 0.0
 
-            v_field = flowi.delta_to_velocity(
-                delta_masked, boxsize, Omega_m, h, a, pad_fraction)
-            velocities[i] = v_field[:, center_idx, center_idx, center_idx]
+            velocities[i] = flowi.delta_to_velocity(
+                delta_masked, boxsize, Omega_m, h, a, pad_fraction,
+                center_only=True)
 
     return velocities
 
@@ -221,8 +219,7 @@ def main():
     Omega_m = 0.306
     h = 1.0
     a = 1.0
-    pad_fraction = 0.5
-    make_plots = True
+    pad_fraction = 1
     smooth_scale = 2.5  # Mpc/h
     compute_radius_analysis = True
     cumulative = True
@@ -256,34 +253,18 @@ def main():
                 rho, loader.boxsize, smooth_scale)
             delta = rho / rho.mean() - 1.0
 
-            v_linear = flowi.delta_to_velocity(delta, loader.boxsize, Omega_m,
-                                               h, a, pad_fraction,
-                                               verbose=i == 0)
+            v_center = flowi.delta_to_velocity(
+                delta, loader.boxsize, Omega_m, h, a, pad_fraction,
+                verbose=i == 0, center_only=True)
 
             grp = f.create_group(f"field_{i}")
-            grp.create_dataset("velocity", data=v_linear, compression="gzip")
+            grp.create_dataset("velocity_center", data=v_center)
             grp.attrs["boxsize"] = loader.boxsize
             grp.attrs["resolution"] = loader.resolution
 
             if i == 0:
                 f.attrs["boxsize"] = loader.boxsize
                 f.attrs["resolution"] = loader.resolution
-
-                if make_plots:
-                    v_actual = loader.load_velocity_field()
-
-                    plot_projections(
-                        v_actual, v_linear,
-                        results_root / "linear_velocity_projections.png"
-                    )
-                    plot_histograms(
-                        v_actual, v_linear,
-                        results_root / "linear_velocity_histograms.png"
-                    )
-                    plot_scatter(
-                        v_actual, v_linear,
-                        results_root / "linear_velocity_scatter.png"
-                    )
 
             if compute_radius_analysis:
                 observer_pos = np.array([loader.boxsize / 2] * 3)
