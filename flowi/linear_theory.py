@@ -82,7 +82,7 @@ def hubble_parameter(Omega_m, h, a):
 
 
 def delta_to_velocity(delta, boxsize, Omega_m, h=1.0, a=1.0, pad_fraction=None,
-                      verbose=False):
+                      verbose=False, center_only=False):
     """
     Convert overdensity to velocity using linear theory.
 
@@ -106,11 +106,15 @@ def delta_to_velocity(delta, boxsize, Omega_m, h=1.0, a=1.0, pad_fraction=None,
         Default is None (no padding).
     verbose : bool, optional
         Print padding information. Default is False.
+    center_only : bool, optional
+        If True, compute velocity only at the box center using direct
+        summation, skipping the inverse FFT. Faster when only the central
+        velocity is needed. Default is False.
 
     Returns
     -------
-    v_field : ndarray, shape (3, N, N, N)
-        Velocity field in km/s.
+    v_field : ndarray, shape (3, N, N, N) or (3,)
+        Velocity field in km/s. If center_only=True, returns shape (3,).
     """
     N = delta.shape[0]
     f = growth_rate(Omega_m)
@@ -134,6 +138,29 @@ def delta_to_velocity(delta, boxsize, Omega_m, h=1.0, a=1.0, pad_fraction=None,
         pad_width = 0
 
     delta_k = np.fft.fftn(delta_padded)
+
+    if center_only:
+        # Optimized path: use 1D arrays, avoid creating 3D k-vector arrays
+        k_1d = 2.0 * np.pi * np.fft.fftfreq(N_eff, d=boxsize_eff / N_eff)
+        k_sq = (k_1d[:, None, None]**2 + k_1d[None, :, None]**2
+                + k_1d[None, None, :]**2)
+        k_sq[0, 0, 0] = 1.0
+
+        # Single kernel array instead of 3 separate velocity arrays
+        kernel = 1j * prefactor * delta_k / k_sq
+        kernel[0, 0, 0] = 0.0
+
+        # Phase and phase*k arrays (1D only)
+        phase = np.ones(N_eff)
+        phase[1::2] = -1
+        phase_k = phase * k_1d
+        norm = N_eff**3
+
+        vx = np.einsum('ijk,i,j,k->', kernel, phase_k, phase, phase).real / norm
+        vy = np.einsum('ijk,i,j,k->', kernel, phase, phase_k, phase).real / norm
+        vz = np.einsum('ijk,i,j,k->', kernel, phase, phase, phase_k).real / norm
+        return np.array([vx, vy, vz])
+
     kx, ky, kz = get_kvectors(N_eff, boxsize_eff)
     k_sq = kx**2 + ky**2 + kz**2
     k_sq[0, 0, 0] = 1.0
