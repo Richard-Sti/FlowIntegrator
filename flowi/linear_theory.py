@@ -81,7 +81,8 @@ def hubble_parameter(Omega_m, h, a):
     return 100.0 * h * E_a
 
 
-def delta_to_velocity(delta, boxsize, Omega_m, h=1.0, a=1.0):
+def delta_to_velocity(delta, boxsize, Omega_m, h=1.0, a=1.0, pad_fraction=None,
+                      verbose=False, center_only=False):
     """
     Convert overdensity to velocity using linear theory.
 
@@ -99,19 +100,68 @@ def delta_to_velocity(delta, boxsize, Omega_m, h=1.0, a=1.0):
         Reduced Hubble constant. Default is 1.0.
     a : float, optional
         Scale factor. Default is 1.0.
+    pad_fraction : float, optional
+        Fractional zero-padding to apply before FFT. For example, 0.5 increases
+        the grid size by 50%. Helps reduce aliasing and edge effects.
+        Default is None (no padding).
+    verbose : bool, optional
+        Print padding information. Default is False.
+    center_only : bool, optional
+        If True, compute velocity only at the box center using direct
+        summation, skipping the inverse FFT. Faster when only the central
+        velocity is needed. Default is False.
 
     Returns
     -------
-    v_field : ndarray, shape (3, N, N, N)
-        Velocity field in km/s.
+    v_field : ndarray, shape (3, N, N, N) or (3,)
+        Velocity field in km/s. If center_only=True, returns shape (3,).
     """
     N = delta.shape[0]
     f = growth_rate(Omega_m)
     H_a = hubble_parameter(Omega_m, h, a)
     prefactor = f * H_a * a
 
-    delta_k = np.fft.fftn(delta)
-    kx, ky, kz = get_kvectors(N, boxsize)
+    # Apply zero-padding if requested
+    if pad_fraction is not None and pad_fraction > 0:
+        N_pad = int(N * (1 + pad_fraction))
+        pad_width = (N_pad - N) // 2
+        delta_padded = np.pad(delta, pad_width, mode='constant',
+                              constant_values=0)
+        N_eff = delta_padded.shape[0]
+        boxsize_eff = boxsize * N_eff / N
+        if verbose:
+            print(f"Padded {N}^3 -> {N_eff}^3 ({pad_width} cells per side)")
+    else:
+        delta_padded = delta
+        N_eff = N
+        boxsize_eff = boxsize
+        pad_width = 0
+
+    delta_k = np.fft.fftn(delta_padded)
+
+    if center_only:
+        # Optimized path: use 1D arrays, avoid creating 3D k-vector arrays
+        k_1d = 2.0 * np.pi * np.fft.fftfreq(N_eff, d=boxsize_eff / N_eff)
+        k_sq = (k_1d[:, None, None]**2 + k_1d[None, :, None]**2
+                + k_1d[None, None, :]**2)
+        k_sq[0, 0, 0] = 1.0
+
+        # Single kernel array instead of 3 separate velocity arrays
+        kernel = 1j * prefactor * delta_k / k_sq
+        kernel[0, 0, 0] = 0.0
+
+        # Phase and phase*k arrays (1D only)
+        phase = np.ones(N_eff)
+        phase[1::2] = -1
+        phase_k = phase * k_1d
+        norm = N_eff**3
+
+        vx = np.einsum('ijk,i,j,k->', kernel, phase_k, phase, phase).real / norm
+        vy = np.einsum('ijk,i,j,k->', kernel, phase, phase_k, phase).real / norm
+        vz = np.einsum('ijk,i,j,k->', kernel, phase, phase, phase_k).real / norm
+        return np.array([vx, vy, vz])
+
+    kx, ky, kz = get_kvectors(N_eff, boxsize_eff)
     k_sq = kx**2 + ky**2 + kz**2
     k_sq[0, 0, 0] = 1.0
 
@@ -126,5 +176,12 @@ def delta_to_velocity(delta, boxsize, Omega_m, h=1.0, a=1.0):
     vx = np.fft.ifftn(vx_k).real
     vy = np.fft.ifftn(vy_k).real
     vz = np.fft.ifftn(vz_k).real
+
+    # Extract original region if padding was applied
+    if pad_width > 0:
+        slc = slice(pad_width, pad_width + N)
+        vx = vx[slc, slc, slc]
+        vy = vy[slc, slc, slc]
+        vz = vz[slc, slc, slc]
 
     return np.stack([vx, vy, vz], axis=0)

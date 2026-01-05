@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import scienceplots  # noqa
 from pathlib import Path
 from scipy.stats import gaussian_kde
+from posterior_agreement import compute_agreement
 from tqdm import trange
 from astropy.coordinates import (ICRS, Galactic,
                                  CartesianRepresentation,
@@ -803,33 +804,45 @@ def load_observer_velocity_convergence(filepath):
 
     with h5py.File(filepath, "r") as f:
         n_fields = len([k for k in f.keys() if k.startswith("field_")])
-        radii = f["field_0/radii"][:]
+        radii = f["radii"][:]
         n_radii = len(radii)
+        cumulative = f.attrs.get("cumulative", True)
 
         print(f"Found {n_fields} fields")
         print(f"Radii: {n_radii} values from {radii.min():.1f} "
               f"to {radii.max():.1f} Mpc/h")
-
-        v_obs = np.zeros((n_fields, n_radii, 3))
-        for i in trange(n_fields, desc="Loading observer velocities"):
-            v_obs[i] = f[f"field_{i}/observer_velocity_vs_radius"][:]
+        print(f"Cumulative: {cumulative}")
 
         Omega_m = f.attrs["Omega_m"]
         smooth_scale = f.attrs["smooth_scale"]
         boxsize = f.attrs["boxsize"]
 
-    print(f"Loaded observer velocities vs radius: shape {v_obs.shape}")
+        # Check if pre-computed observer velocities exist
+        has_precomputed = "observer_velocity_vs_radius" in f["field_0"]
+
+        if not has_precomputed:
+            raise ValueError(
+                "File does not contain pre-computed observer velocities. "
+                "Regenerate with compute_radius_analysis=True in "
+                "linear_velocity_field.py")
+
+        if cumulative:
+            v_obs = np.zeros((n_fields, n_radii, 3))
+        else:
+            v_obs = np.zeros((n_fields, n_radii - 1, 3))
+
+        for i in trange(n_fields, desc="Loading observer velocities"):
+            v_obs[i] = f[f"field_{i}/observer_velocity_vs_radius"][:]
+        print(f"Loaded pre-computed observer velocities: shape {v_obs.shape}")
+
     print(f"Metadata: Ω_m={Omega_m}, smooth_scale={smooth_scale} Mpc/h, "
           f"boxsize={boxsize} Mpc/h")
 
-    print("\nExtracting observer velocities from full velocity fields...")
+    print("\nLoading center velocities...")
     v_obs_full = np.zeros((n_fields, 3))
     with h5py.File(filepath, "r") as f:
-        for i in trange(n_fields, desc="Extracting full field velocities"):
-            v_field = f[f"field_{i}/velocity"][:]
-            resolution = f[f"field_{i}"].attrs["resolution"]
-            center_idx = resolution // 2
-            v_obs_full[i] = v_field[:, center_idx, center_idx, center_idx]
+        for i in trange(n_fields, desc="Loading center velocities"):
+            v_obs_full[i] = f[f"field_{i}/velocity_center"][:]
 
     print(f"Extracted full field velocities: shape {v_obs_full.shape}")
 
@@ -954,15 +967,16 @@ def plot_observer_velocity_convergence(data, R_max=160.0, output_file=None):
         for ax, (mean, std, ylabel) in zip(axes, panel_data):
             ax.errorbar(radii[mask], mean[mask], yerr=std[mask],
                         fmt='o', ms=2, capsize=3, color=COLS[0],
-                        label=r'\texttt{Manticore} (linear)')
+                        label=r'$\mathrm{Manticore \ (linear)}$')
             ax.set_ylabel(ylabel)
             ax.set_xlabel(r'$R~[h^{-1}\,\mathrm{Mpc}]$')
 
-        cmb = np.array([620.0, 271.9, 29.6])
-        cmb_err = np.array([15.0, 2.0, 1.4])
+        # Use values from data dict if available, otherwise use defaults
+        cmb = data.get('cmb', np.array([620.0, 271.9, 29.6]))
+        cmb_err = data.get('cmb_err', np.array([15.0, 2.0, 1.4]))
 
-        inner = np.array([443.377, 229.613, 42.318])
-        inner_err = np.array([56.843, 13.095, 9.939])
+        inner = data.get('inner', np.array([443.377, 229.613, 42.318]))
+        inner_err = data.get('inner_err', np.array([56.843, 13.095, 9.939]))
 
         rng = np.random.default_rng(42)
         n_samp = 50_000
@@ -981,12 +995,12 @@ def plot_observer_velocity_convergence(data, R_max=160.0, output_file=None):
             axes[i].axhspan(cmb_val - cmb_err_val,
                             cmb_val + cmb_err_val,
                             color=COLS[1], alpha=0.2, zorder=2,
-                            label='CMB–LG velocity' if i == 0
+                            label=r'$\mathrm{CMB–LG \ velocity}$' if i == 0
                             else "_nolegend_")
 
         axes[0].errorbar(R_ref, inner[0], yerr=inner_err[0],
                          fmt='s', ms=2, capsize=3, color=COLS[2],
-                         zorder=7, label=r'\texttt{Manticore} (obs)')
+                         zorder=7, label=r'$\mathrm{Manticore \ (obs)}$')
         axes[1].errorbar(R_ref, inner[1], yerr=inner_err[1],
                          fmt='s', ms=2, capsize=3, color=COLS[2],
                          zorder=7)
@@ -997,7 +1011,7 @@ def plot_observer_velocity_convergence(data, R_max=160.0, output_file=None):
         axes[0].errorbar(R_vec, vec_mu[0], yerr=vec_std[0],
                          fmt='D', ms=2, capsize=3, color=COLS[3],
                          zorder=8,
-                         label=r'\texttt{Manticore} (obs + $\sigma_v$)')
+                         label=r'$\mathrm{Manticore \ (obs} + \sigma_v)$')
         axes[1].errorbar(R_vec, vec_mu[1], yerr=vec_std[1],
                          fmt='D', ms=2, capsize=3, color=COLS[3],
                          zorder=8)
@@ -1014,7 +1028,8 @@ def plot_observer_velocity_convergence(data, R_max=160.0, output_file=None):
 
         for i, ax in enumerate(axes):
             ax.axvspan(x0 - dx_minus, x0 + dx_plus, color='gray',
-                       alpha=0.5, label='cGA' if i == 0 else "_nolegend_")
+                       alpha=0.5,
+                       label=r'$\mathrm{cGA}$' if i == 0 else "_nolegend_")
 
         handles, labels = axes[0].get_legend_handles_labels()
         handles = handles[1:] + handles[:1]
@@ -1031,64 +1046,142 @@ def plot_observer_velocity_convergence(data, R_max=160.0, output_file=None):
         plt.close()
 
     # Compute ratio and angular offset between Manticore (obs) and CMB-LG
-    print("\n" + "="*60)
-    print("Manticore (obs) vs CMB-LG dipole comparison")
-    print("="*60)
-
-    # Monte Carlo sampling for uncertainty propagation
     n_mc = 100_000
     rng_mc = np.random.default_rng(42)
 
-    # Sample CMB-LG
+    # Sample CMB-LG (shared for both cases)
     cmb_v_samples = rng_mc.normal(cmb[0], cmb_err[0], n_mc)
     cmb_ell_samples = rng_mc.normal(cmb[1], cmb_err[1], n_mc)
     cmb_b_samples = rng_mc.normal(cmb[2], cmb_err[2], n_mc)
 
-    # Sample Manticore (obs)
-    inner_v_samples = rng_mc.normal(inner[0], inner_err[0], n_mc)
-    inner_ell_samples = rng_mc.normal(inner[1], inner_err[1], n_mc)
-    inner_b_samples = rng_mc.normal(inner[2], inner_err[2], n_mc)
-
-    # Compute magnitude ratio
-    ratio_samples = inner_v_samples / cmb_v_samples
-    ratio_med = np.percentile(ratio_samples, 50)
-    ratio_low = np.percentile(ratio_samples, 16)
-    ratio_high = np.percentile(ratio_samples, 84)
-
-    print("\nMagnitude ratio (Manticore/CMB-LG):")
-    print(f"  {ratio_med:.3f} -{ratio_med - ratio_low:.3f}/"
-          f"+{ratio_high - ratio_med:.3f}")
-
-    # Compute angular offset
-    # Convert to Cartesian for each sample
     cmb_cart_samples = np.zeros((n_mc, 3))
-    inner_cart_samples = np.zeros((n_mc, 3))
-
     for i in range(n_mc):
         cmb_cart_samples[i] = galactic_to_cartesian(
             cmb_v_samples[i], cmb_ell_samples[i], cmb_b_samples[i]
         )
+
+    def compute_comparison(label, v_cart_samples):
+        """Compute magnitude ratio and angular offset."""
+        v_mag = np.linalg.norm(v_cart_samples, axis=1)
+        cmb_mag = np.linalg.norm(cmb_cart_samples, axis=1)
+
+        # Magnitude ratio
+        ratio_samples = v_mag / cmb_mag
+        ratio_med = np.percentile(ratio_samples, 50)
+        ratio_low = np.percentile(ratio_samples, 16)
+        ratio_high = np.percentile(ratio_samples, 84)
+
+        # Angular offset
+        dot_products = np.sum(cmb_cart_samples * v_cart_samples, axis=1)
+        cos_theta = dot_products / (cmb_mag * v_mag)
+        cos_theta = np.clip(cos_theta, -1, 1)
+        theta_samples = np.rad2deg(np.arccos(cos_theta))
+
+        theta_med = np.percentile(theta_samples, 50)
+        theta_low = np.percentile(theta_samples, 16)
+        theta_high = np.percentile(theta_samples, 84)
+
+        print(f"\n{label}:")
+        print(f"  Magnitude ratio: {ratio_med:.3f} "
+              f"-{ratio_med - ratio_low:.3f}/+{ratio_high - ratio_med:.3f}")
+        print(f"  Angular offset:  {theta_med:.2f} "
+              f"-{theta_med - theta_low:.2f}/"
+              f"+{theta_high - theta_med:.2f} deg")
+
+    print("\n" + "="*60)
+    print("Comparison vs CMB-LG dipole")
+    print("="*60)
+
+    # Case 1: Manticore (obs) without sigma_v
+    inner_v_samples = rng_mc.normal(inner[0], inner_err[0], n_mc)
+    inner_ell_samples = rng_mc.normal(inner[1], inner_err[1], n_mc)
+    inner_b_samples = rng_mc.normal(inner[2], inner_err[2], n_mc)
+
+    inner_cart_samples = np.zeros((n_mc, 3))
+    for i in range(n_mc):
         inner_cart_samples[i] = galactic_to_cartesian(
             inner_v_samples[i], inner_ell_samples[i], inner_b_samples[i]
         )
+    compute_comparison("Manticore (obs)", inner_cart_samples)
 
-    # Angular separation using dot product
-    dot_products = np.sum(cmb_cart_samples * inner_cart_samples, axis=1)
-    cmb_mag = np.linalg.norm(cmb_cart_samples, axis=1)
-    inner_mag = np.linalg.norm(inner_cart_samples, axis=1)
+    # Case 2: Manticore (obs) with sigma_v
+    v0 = galactic_to_cartesian(*inner)
+    dv = rng_mc.normal(scale=sigma_v, size=(n_mc, 3))
+    inner_sigmav_cart_samples = v0[None, :] + dv
+    compute_comparison(f"Manticore (obs + σ_v={sigma_v} km/s)",
+                       inner_sigmav_cart_samples)
 
-    cos_theta = dot_products / (cmb_mag * inner_mag)
-    cos_theta = np.clip(cos_theta, -1, 1)  # Numerical safety
-    theta_samples = np.rad2deg(np.arccos(cos_theta))
-
-    theta_med = np.percentile(theta_samples, 50)
-    theta_low = np.percentile(theta_samples, 16)
-    theta_high = np.percentile(theta_samples, 84)
-
-    print("\nAngular offset:")
-    print(f"  {theta_med:.2f} -{theta_med - theta_low:.2f}/"
-          f"+{theta_high - theta_med:.2f} deg")
     print("="*60 + "\n")
+
+    return fig, axes
+
+
+def plot_observer_velocity_shells(data, R_max=200.0, output_file=None):
+    """
+    Plot observer velocity contributions from radial shells.
+
+    Parameters
+    ----------
+    data : dict
+        Output from load_observer_velocity_convergence (with cumulative=False).
+    R_max : float, optional
+        Maximum radius to plot. Default: 200.0 Mpc/h.
+    output_file : str or pathlib.Path, optional
+        If provided, save figure to this path.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The matplotlib Figure object.
+    """
+    radii = data['radii']
+    mean_vmag = data['mean_vmag']
+    std_vmag = data['std_vmag']
+    mean_ell = data['mean_ell']
+    std_ell = data['std_ell']
+    mean_b = data['mean_b']
+    std_b = data['std_b']
+
+    # Compute bin centers
+    bin_centers = 0.5 * (radii[:-1] + radii[1:])
+    mask = bin_centers < R_max
+
+    with plt.style.context("science"):
+        fig, axes = plt.subplots(1, 3, figsize=(9, 3.0), sharex=True)
+
+        panel_data = [
+            (mean_vmag, std_vmag,
+             r'$|\mathbf{V}_{\rm shell}|~[\mathrm{km\,s^{-1}}]$'),
+            (mean_ell, std_ell, r'$\ell~[\mathrm{deg}]$'),
+            (mean_b, std_b, r'$b~[\mathrm{deg}]$'),
+        ]
+
+        for ax, (mean, std, ylabel) in zip(axes, panel_data):
+            ax.errorbar(bin_centers[mask], mean[mask], yerr=std[mask],
+                        fmt='o', ms=3, capsize=3, color=COLS[0],
+                        label='Linear theory')
+            ax.set_ylabel(ylabel)
+            ax.set_xlabel(r'$R~[h^{-1}\,\mathrm{Mpc}]$')
+
+        # cGA region
+        x0 = 41.3
+        dx_minus = 4.7
+        dx_plus = 2.0
+
+        for i, ax in enumerate(axes):
+            ax.axvspan(x0 - dx_minus, x0 + dx_plus, color='gray',
+                       alpha=0.5,
+                       label=r'$\mathrm{cGA}$' if i == 0 else "_nolegend_")
+            ax.set_xlim(0, R_max)
+
+        axes[0].legend(loc='upper right')
+
+        plt.tight_layout()
+
+        if output_file is not None:
+            plt.savefig(output_file, dpi=300, bbox_inches="tight")
+
+        plt.close()
 
     return fig, axes
 
@@ -1225,9 +1318,9 @@ def plot_velocity_convergence(filepath, vmag_range=None, sigma_v=None,
             color = COLS[i % len(COLS)]
             sv = res['sigma_v']
             if sv is not None:
-                label = f"$\\sigma_v = {sv}$ km/s"
+                label = rf"$\sigma_v = {sv}~\mathrm{{km\,s^{{-1}}}}$"
             else:
-                label = "No $\\sigma_v$"
+                label = r"$\mathrm{No} ~ \sigma_v$"
 
             if i == 0:
                 # First case: filled bands, higher zorder
@@ -1325,6 +1418,367 @@ def plot_velocity_convergence(filepath, vmag_range=None, sigma_v=None,
     return fig, axes
 
 
+def plot_velocity_convergence_scatter(filepath, data, radius, sigma_v=None,
+                                      reference_radius=None, vmag_range=None,
+                                      gaussianize_manticore=False):
+    """
+    Scatter plot of magnitude ratio vs angular offset at a given radius.
+
+    Shows two distributions:
+    1. Blue contour: Quijote random simulations - ratio of velocity at `radius`
+       relative to full box velocity.
+    2. Red contour: Manticore - ratio of velocity at `reference_radius` (or
+       Manticore observer velocity if not provided) relative to CMB dipole.
+
+    Parameters
+    ----------
+    filepath : str or pathlib.Path
+        Path to .npz file with Quijote simulation data:
+        - radii: 1D array of radii
+        - v_full: (n_sims, 3) velocities at full box
+        - v_radii: (n_sims, n_radii, 3) velocities vs radius
+    data : dict
+        Output from load_observer_velocity_convergence containing:
+        - radii: array of radii
+        - v_obs: (n_fields, n_radii, 3) velocities vs radius from Manticore
+        - cmb: (3,) CMB-LG velocity [vmag, ell, b]
+        - cmb_err: (3,) CMB-LG errors
+        - inner: (3,) Manticore obs velocity [vmag, ell, b]
+        - inner_err: (3,) Manticore obs errors
+    radius : float
+        Radius in Mpc/h at which to evaluate for the Quijote randoms.
+    sigma_v : float or list of float, optional
+        If provided, propagate 3D velocity uncertainty:
+        - For Quijote: add to observer velocity (center of box)
+        - For Manticore: add to Manticore (linear) velocity before ratio
+        If a list is provided, create multiple panels (one per sigma_v value).
+    reference_radius : float, optional
+        If provided, use Manticore velocity at this radius from `data['v_obs']`
+        instead of Manticore observer velocity (`inner`).
+    vmag_range : tuple of float, optional
+        If provided, filter Quijote simulations to only those with full box
+        velocity magnitude within (vmin, vmax) km/s.
+    gaussianize_manticore : bool, optional
+        If True, fit a 2D Gaussian to the Manticore (ratio, log10(theta))
+        distribution and use samples from that Gaussian for plotting.
+        Default is False.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    filepath = Path(filepath)
+    if not filepath.exists():
+        raise FileNotFoundError(f"File not found: {filepath}")
+
+    # Convert sigma_v to list
+    if sigma_v is None:
+        sigma_v_list = [None]
+    elif isinstance(sigma_v, (list, tuple, np.ndarray)):
+        sigma_v_list = list(sigma_v)
+    else:
+        sigma_v_list = [sigma_v]
+
+    n_panels = len(sigma_v_list)
+
+    # Load Quijote data
+    f = np.load(filepath)
+    R = f["radii"]
+    v_full_orig = f["v_full"]
+    v_radii_orig = f["v_radii"]
+    n_total = len(v_full_orig)
+
+    # Filter based on full box velocity magnitude
+    if vmag_range is not None:
+        vmin, vmax = vmag_range
+        v_full_mag = np.linalg.norm(v_full_orig, axis=-1)
+        mask = (v_full_mag >= vmin) & (v_full_mag <= vmax)
+        v_full_orig = v_full_orig[mask]
+        v_radii_orig = v_radii_orig[mask]
+        n_selected = len(v_full_orig)
+        pct = 100 * n_selected / n_total
+        print(f"Quijote: vmag_range = ({vmin}, {vmax}) km/s: "
+              f"{n_selected}/{n_total} ({pct:.1f}%)")
+
+    # Find closest radius index for Quijote
+    idx_r = np.argmin(np.abs(R - radius))
+    R_actual = R[idx_r]
+    print(f"Quijote: Using R = {R_actual:.1f} Mpc/h (requested {radius})")
+
+    v_at_r = v_radii_orig[:, idx_r, :]
+
+    # Manticore setup (common across panels)
+    cmb = data.get('cmb', np.array([620.0, 271.9, 29.6]))
+    cmb_err = data.get('cmb_err', np.array([15.0, 2.0, 1.4]))
+    inner = data.get('inner', np.array([443.377, 229.613, 42.318]))
+    inner_err = data.get('inner_err', np.array([56.843, 13.095, 9.939]))
+
+    n_mc = 100_000
+
+    # Get Manticore velocity (pre-computed Galactic coords)
+    if reference_radius is not None:
+        radii_manticore = data['radii']
+        idx_ref = np.argmin(np.abs(radii_manticore - reference_radius))
+        R_ref_actual = radii_manticore[idx_ref]
+        print(f"Manticore: Using R = {R_ref_actual:.1f} Mpc/h "
+              f"(requested {reference_radius})")
+
+        v_mag_manticore = data['v_obs_vmag'][:, idx_ref]
+        v_ell_manticore = data['v_obs_ell'][:, idx_ref]
+        v_b_manticore = data['v_obs_b'][:, idx_ref]
+        print(f"Manticore (linear) at R={R_ref_actual:.1f} Mpc/h "
+              f"({len(v_mag_manticore)} realizations):")
+        print(f"  |V| = {np.mean(v_mag_manticore):.1f} ± "
+              f"{np.std(v_mag_manticore):.1f} km/s")
+        print(f"  ell = {np.mean(v_ell_manticore):.1f} ± "
+              f"{np.std(v_ell_manticore):.1f} deg")
+        print(f"  b   = {np.mean(v_b_manticore):.1f} ± "
+              f"{np.std(v_b_manticore):.1f} deg")
+
+        v_manticore_gal_base = np.array([
+            galactic_to_cartesian(vm, el, bb)
+            for vm, el, bb in zip(v_mag_manticore, v_ell_manticore,
+                                  v_b_manticore)])
+        manticore_label = r"Manticore"
+    else:
+        print("Manticore (obs):")
+        print(f"  |V| = {inner[0]:.1f} ± {inner_err[0]:.1f} km/s")
+        print(f"  ell = {inner[1]:.1f} ± {inner_err[1]:.1f} deg")
+        print(f"  b   = {inner[2]:.1f} ± {inner_err[2]:.1f} deg")
+        v_manticore_gal_base = None
+        manticore_label = r"Manticore"
+
+    def find_contour_levels(x, y, fractions):
+        """Find KDE contour levels enclosing given fractions of data."""
+        valid = np.isfinite(x) & np.isfinite(y) & (y > 0)
+        x = x[valid]
+        y = y[valid]
+
+        log_y = np.log10(y)
+        xy_data = np.vstack([x, log_y])
+
+        try:
+            kde = gaussian_kde(xy_data)
+        except np.linalg.LinAlgError:
+            jitter_x = 1e-6 * np.std(x) * np.random.randn(len(x))
+            jitter_y = 1e-6 * np.std(log_y) * np.random.randn(len(log_y))
+            xy_data = np.vstack([x + jitter_x, log_y + jitter_y])
+            kde = gaussian_kde(xy_data)
+
+        x_grid = np.linspace(x.min() - 0.1, x.max() + 0.1, 100)
+        y_grid = np.linspace(log_y.min() - 0.2, log_y.max() + 0.2, 100)
+        X, Y = np.meshgrid(x_grid, y_grid)
+        positions = np.vstack([X.ravel(), Y.ravel()])
+        Z = kde(positions).reshape(X.shape)
+
+        Z_flat = Z.ravel()
+        Z_sorted = np.sort(Z_flat)[::-1]
+        Z_cumsum = np.cumsum(Z_sorted) / Z_sorted.sum()
+
+        levels = []
+        for frac in fractions:
+            idx = np.searchsorted(Z_cumsum, frac)
+            levels.append(Z_sorted[min(idx, len(Z_sorted) - 1)])
+
+        return X, Y, Z, sorted(levels)
+
+    # Compute distributions for each sigma_v
+    results = []
+    for sv in sigma_v_list:
+        rng = np.random.default_rng(42)
+        rng_mc = np.random.default_rng(42)
+
+        # Quijote
+        if sv is not None:
+            dv = rng.normal(0, sv, size=v_full_orig.shape)
+            v_full_pert = v_full_orig + dv
+        else:
+            v_full_pert = v_full_orig.copy()
+
+        vR_mag = np.linalg.norm(v_at_r, axis=-1)
+        vfull_mag = np.linalg.norm(v_full_pert, axis=-1)
+        quijote_ratio = vR_mag / vfull_mag
+
+        dot_product = np.sum(v_at_r * v_full_pert, axis=-1)
+        cos_theta = np.clip(dot_product / (vR_mag * vfull_mag), -1.0, 1.0)
+        quijote_theta = np.degrees(np.arccos(cos_theta))
+
+        # Sample CMB-LG
+        cmb_v_samples = rng_mc.normal(cmb[0], cmb_err[0], n_mc)
+        cmb_ell_samples = rng_mc.normal(cmb[1], cmb_err[1], n_mc)
+        cmb_b_samples = rng_mc.normal(cmb[2], cmb_err[2], n_mc)
+        cmb_cart = np.array([
+            galactic_to_cartesian(v, ell, b) for v, ell, b
+            in zip(cmb_v_samples, cmb_ell_samples, cmb_b_samples)])
+        cmb_mag = np.linalg.norm(cmb_cart, axis=1)
+
+        # Manticore
+        if reference_radius is not None:
+            v_manticore_gal = v_manticore_gal_base.copy()
+            if sv is not None:
+                dv = rng_mc.normal(0, sv, size=v_manticore_gal.shape)
+                v_manticore_gal = v_manticore_gal + dv
+
+            v_manticore_mag = np.linalg.norm(v_manticore_gal, axis=-1)
+            n_fields = len(v_manticore_gal)
+            indices = rng_mc.choice(n_fields, size=n_mc, replace=True)
+            v_manticore_resampled = v_manticore_gal[indices]
+            v_manticore_mag_resampled = v_manticore_mag[indices]
+
+            manticore_ratio = v_manticore_mag_resampled / cmb_mag
+            dot_products = np.sum(cmb_cart * v_manticore_resampled, axis=1)
+            cos_theta_m = np.clip(
+                dot_products / (cmb_mag * v_manticore_mag_resampled), -1, 1)
+            manticore_theta = np.rad2deg(np.arccos(cos_theta_m))
+        else:
+            if sv is not None:
+                v0 = galactic_to_cartesian(*inner)
+                dv = rng_mc.normal(scale=sv, size=(n_mc, 3))
+                inner_cart = v0[None, :] + dv
+            else:
+                inner_v_samples = rng_mc.normal(inner[0], inner_err[0], n_mc)
+                inner_ell_samples = rng_mc.normal(inner[1], inner_err[1], n_mc)
+                inner_b_samples = rng_mc.normal(inner[2], inner_err[2], n_mc)
+                inner_cart = np.array([
+                    galactic_to_cartesian(v, ell, b) for v, ell, b
+                    in zip(inner_v_samples, inner_ell_samples, inner_b_samples)
+                ])
+
+            inner_mag = np.linalg.norm(inner_cart, axis=1)
+            manticore_ratio = inner_mag / cmb_mag
+            dot_products = np.sum(cmb_cart * inner_cart, axis=1)
+            cos_theta_m = np.clip(dot_products / (cmb_mag * inner_mag), -1, 1)
+            manticore_theta = np.rad2deg(np.arccos(cos_theta_m))
+
+        # Gaussianize if requested
+        if gaussianize_manticore:
+            valid = (np.isfinite(manticore_ratio) &
+                     np.isfinite(manticore_theta) & (manticore_theta > 0))
+            ratio_valid = manticore_ratio[valid]
+            log_theta_valid = np.log10(manticore_theta[valid])
+
+            mean = np.array([np.mean(ratio_valid), np.mean(log_theta_valid)])
+            cov = np.cov(ratio_valid, log_theta_valid)
+
+            rng_gauss = np.random.default_rng(42)
+            samples = rng_gauss.multivariate_normal(
+                mean, cov, size=len(ratio_valid))
+            manticore_ratio = samples[:, 0]
+            manticore_theta = 10**samples[:, 1]
+
+        # Label for this sigma_v
+        if sv is not None:
+            sv_label = rf"$\sigma_v = {sv} ~ \mathrm{{km \, s^{{-1}}}}$"
+        else:
+            sv_label = r"$\mathrm{No} ~ \sigma_v$"
+
+        results.append({
+            'sigma_v': sv,
+            'sv_label': sv_label,
+            'quijote_ratio': quijote_ratio,
+            'quijote_theta': quijote_theta,
+            'manticore_ratio': manticore_ratio,
+            'manticore_theta': manticore_theta,
+        })
+
+    # Print statistics
+    for res in results:
+        print("\n" + "="*60)
+        print(f"{res['sv_label']}")
+        print("-"*60)
+        print("Quijote randoms:")
+        print(f"  Magnitude ratio: {np.median(res['quijote_ratio']):.3f} ± "
+              f"{np.std(res['quijote_ratio']):.3f}")
+        print(f"  Angular offset:  {np.median(res['quijote_theta']):.2f} ± "
+              f"{np.std(res['quijote_theta']):.2f} deg")
+        print(f"\n{manticore_label}:")
+        print(f"  Magnitude ratio: {np.median(res['manticore_ratio']):.3f} ± "
+              f"{np.std(res['manticore_ratio']):.3f}")
+        print(f"  Angular offset:  {np.median(res['manticore_theta']):.2f} ± "
+              f"{np.std(res['manticore_theta']):.2f} deg")
+        print("="*60)
+
+    # Plotting
+    with plt.style.context("science"):
+        default_width, default_height = plt.rcParams['figure.figsize']
+        if n_panels == 1:
+            fig, axes = plt.subplots(
+                figsize=(default_width, default_height))
+            axes = [axes]
+        else:
+            fig, axes = plt.subplots(
+                n_panels, 1,
+                figsize=(default_width, 0.85 * default_height * n_panels),
+                sharex=True)
+
+        color_quijote = COLS[0]
+        color_manticore = COLS[1]
+
+        for i, (res, ax) in enumerate(zip(results, axes)):
+            # Quijote contours (filled)
+            X, Y, Z, levels = find_contour_levels(
+                res['quijote_ratio'], res['quijote_theta'], [0.68, 0.95])
+            ax.contourf(X, 10**Y, Z, levels=[levels[0], levels[1], Z.max()],
+                        colors=[color_quijote], alpha=[0.2, 0.4])
+            ax.contour(X, 10**Y, Z, levels=levels, colors=[color_quijote],
+                       linewidths=1, linestyles=['-', '--'])
+
+            # Manticore contours (red, unfilled)
+            X_m, Y_m, Z_m, levels_m = find_contour_levels(
+                res['manticore_ratio'], res['manticore_theta'], [0.68, 0.95])
+            ax.contour(X_m, 10**Y_m, Z_m, levels=levels_m,
+                       colors=[color_manticore], linewidths=1.5,
+                       linestyles=['-', '--'], zorder=10)
+
+            # Set axis limits based on 2σ contours
+            mask_q = Z >= levels[0]
+            mask_m = Z_m >= levels_m[0]
+
+            x_min = min(X[mask_q].min(), X_m[mask_m].min())
+            x_max = max(X[mask_q].max(), X_m[mask_m].max())
+            y_min = min(Y[mask_q].min(), Y_m[mask_m].min())
+            y_max = max(Y[mask_q].max(), Y_m[mask_m].max())
+
+            x_pad = 0.15 * (x_max - x_min)
+            y_pad = 0.15 * (y_max - y_min)
+
+            ax.axvline(1, color='black', linestyle='--',
+                       linewidth=ax.spines['bottom'].get_linewidth())
+            ax.set_ylabel(r"$\mathrm{Angular \ alignment} ~ [\mathrm{deg}]$")
+            ax.set_yscale("log")
+            ax.set_xlim(x_min - x_pad, x_max + x_pad)
+            ax.set_ylim(10**(y_min - y_pad), 10**(y_max + y_pad))
+
+            # Panel label
+            ax.text(0.95, 0.95, res['sv_label'], transform=ax.transAxes,
+                    ha='right', va='top')
+
+            # Legend only on first panel
+            if i == 0:
+                ax.plot([], [], color=color_quijote,
+                        label=r"$\mathrm{Random}$")
+                ax.plot([], [], color=color_manticore,
+                        label=r"$\mathrm{Manticore}$")
+                ax.legend(loc='lower left')
+
+            # Posterior agreement
+            chain_quijote = np.column_stack(
+                [res['quijote_ratio'], np.log10(res['quijote_theta'])])
+            chain_manticore = np.column_stack(
+                [res['manticore_ratio'], np.log10(res['manticore_theta'])])
+            agreement = compute_agreement([chain_quijote, chain_manticore])
+            print(f"{res['sv_label']}: Posterior agreement = "
+                  f"{agreement.sigma:.2f}σ")
+
+        # Only set xlabel on last panel
+        axes[-1].set_xlabel(r"$\mathrm{Magnitude \ ratio}$")
+
+        fig.tight_layout()
+        plt.close()
+
+    return fig, axes
+
+
 def plot_observer_vmag_histogram(filepath):
     """
     Plot a KDE of observer velocity magnitudes with CMB reference.
@@ -1356,12 +1810,13 @@ def plot_observer_vmag_histogram(filepath):
         ax.plot(x, kde(x), color=COLS[0])
 
         # CMB-LG velocity band: 620 ± 15 km/s
-        ax.axvspan(620 - 15, 620 + 15, color=COLS[1], alpha=0.3, label="CMB-LG")
+        ax.axvspan(620 - 15, 620 + 15, color=COLS[1], alpha=0.3,
+                   label=r"$\mathrm{CMB–LG}$")
         ax.legend(loc='upper right')
 
         ax.set_xlabel(
             r"$|\mathbf{V}_{\rm box}|~[\mathrm{km}\,\mathrm{s}^{-1}]$")
-        ax.set_ylabel("Probability density")
+        ax.set_ylabel(r"$\mathrm{Probability \ density}$")
         ax.set_xlim(0, vmag.mean() + 4 * vmag.std())
         ax.set_ylim(0)
 

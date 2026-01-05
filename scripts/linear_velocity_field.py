@@ -138,7 +138,8 @@ def plot_scatter(v_actual, v_linear, output_file):
 
 
 def compute_observer_velocity_vs_radius(delta, boxsize, observer_pos, radii,
-                                        Omega_m, h, a):
+                                        Omega_m, h, a, cumulative=True,
+                                        pad_fraction=None):
     """
     Compute observer velocity as a function of truncation radius.
 
@@ -162,11 +163,17 @@ def compute_observer_velocity_vs_radius(delta, boxsize, observer_pos, radii,
         Reduced Hubble constant.
     a : float
         Scale factor.
+    cumulative : bool
+        If True (default), use cumulative thresholds (all voxels within
+        radius). If False, use radial bins (voxels between consecutive radii).
+    pad_fraction : float, optional
+        Fractional zero-padding for FFT.
 
     Returns
     -------
-    velocities : ndarray, shape (len(radii), 3)
-        Observer velocity [vx, vy, vz] for each radius.
+    velocities : ndarray, shape (len(radii), 3) or (len(radii)-1, 3)
+        Observer velocity [vx, vy, vz] for each radius (cumulative) or each
+        bin (if cumulative=False).
     """
     N = delta.shape[0]
     cell_size = boxsize / N
@@ -181,19 +188,28 @@ def compute_observer_velocity_vs_radius(delta, boxsize, observer_pos, radii,
     dz = z - observer_pos[2]
     dist = np.sqrt(dx**2 + dy**2 + dz**2)
 
-    velocities = np.zeros((len(radii), 3))
+    if cumulative:
+        velocities = np.zeros((len(radii), 3))
 
-    for i, radius in enumerate(radii):
-        # Mask: set delta = 0 outside radius
-        delta_masked = delta.copy()
-        delta_masked[dist > radius] = 0.0
+        for i, radius in enumerate(radii):
+            delta_masked = delta.copy()
+            delta_masked[dist > radius] = 0.0
 
-        # Compute velocity field
-        v_field = flowi.delta_to_velocity(delta_masked, boxsize, Omega_m, h, a)
+            velocities[i] = flowi.delta_to_velocity(
+                delta_masked, boxsize, Omega_m, h, a, pad_fraction,
+                center_only=True)
+    else:
+        n_bins = len(radii) - 1
+        velocities = np.zeros((n_bins, 3))
 
-        # Extract velocity at observer position (center of box)
-        center_idx = N // 2
-        velocities[i] = v_field[:, center_idx, center_idx, center_idx]
+        for i in range(n_bins):
+            r_min, r_max = radii[i], radii[i + 1]
+            delta_masked = delta.copy()
+            delta_masked[(dist < r_min) | (dist > r_max)] = 0.0
+
+            velocities[i] = flowi.delta_to_velocity(
+                delta_masked, boxsize, Omega_m, h, a, pad_fraction,
+                center_only=True)
 
     return velocities
 
@@ -203,11 +219,16 @@ def main():
     Omega_m = 0.306
     h = 1.0
     a = 1.0
-    make_plots = True
+    pad_fraction = 0.5
     smooth_scale = 2.5  # Mpc/h
     compute_radius_analysis = True
+    cumulative = True
     radii = np.arange(10, 200, 15)  # Mpc/h
-    output_file = results_root / "linear_velocity_fields.hdf5"
+
+    if cumulative:
+        output_file = results_root / "linear_velocity_fields.hdf5"
+    else:
+        output_file = results_root / "linear_velocity_fields_bins.hdf5"
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -219,9 +240,11 @@ def main():
         f.attrs["h"] = h
         f.attrs["a"] = a
         f.attrs["smooth_scale"] = smooth_scale
+        f.attrs["cumulative"] = cumulative
         f.attrs["description"] = (
             "Velocity fields from density using linear perturbation theory"
         )
+        f.create_dataset("radii", data=radii)
 
         for i in trange(n_fields, desc="Processing fields"):
             loader = flowi.ManticoreLoader(data_root, i)
@@ -230,11 +253,12 @@ def main():
                 rho, loader.boxsize, smooth_scale)
             delta = rho / rho.mean() - 1.0
 
-            v_linear = flowi.delta_to_velocity(delta, loader.boxsize, Omega_m,
-                                                h, a)
+            v_center = flowi.delta_to_velocity(
+                delta, loader.boxsize, Omega_m, h, a, pad_fraction,
+                verbose=i == 0, center_only=True)
 
             grp = f.create_group(f"field_{i}")
-            grp.create_dataset("velocity", data=v_linear, compression="gzip")
+            grp.create_dataset("velocity_center", data=v_center)
             grp.attrs["boxsize"] = loader.boxsize
             grp.attrs["resolution"] = loader.resolution
 
@@ -242,33 +266,14 @@ def main():
                 f.attrs["boxsize"] = loader.boxsize
                 f.attrs["resolution"] = loader.resolution
 
-                if make_plots:
-                    v_actual = loader.load_velocity_field()
-
-                    plot_projections(
-                        v_actual, v_linear,
-                        results_root / "linear_velocity_projections.png"
-                    )
-                    plot_histograms(
-                        v_actual, v_linear,
-                        results_root / "linear_velocity_histograms.png"
-                    )
-                    plot_scatter(
-                        v_actual, v_linear,
-                        results_root / "linear_velocity_scatter.png"
-                    )
-
             if compute_radius_analysis:
                 observer_pos = np.array([loader.boxsize / 2] * 3)
                 v_obs_vs_r = compute_observer_velocity_vs_radius(
                     delta, loader.boxsize, observer_pos, radii,
-                    Omega_m, h, a)
+                    Omega_m, h, a, cumulative, pad_fraction)
 
                 grp.create_dataset("observer_velocity_vs_radius",
                                    data=v_obs_vs_r)
-                if i == 0:
-                    grp.create_dataset("radii", data=radii)
-
                 v_obs_all_fields.append(v_obs_vs_r)
 
     print(f"Wrote linear velocity fields to {output_file}")
