@@ -219,7 +219,7 @@ def main():
     Omega_m = 0.306
     h = 1.0
     a = 1.0
-    pad_fraction = 1
+    pad_fraction = 0.5
     smooth_scale = 2.5  # Mpc/h
     compute_radius_analysis = True
     cumulative = True

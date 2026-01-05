@@ -838,14 +838,11 @@ def load_observer_velocity_convergence(filepath):
     print(f"Metadata: Ω_m={Omega_m}, smooth_scale={smooth_scale} Mpc/h, "
           f"boxsize={boxsize} Mpc/h")
 
-    print("\nExtracting observer velocities from full velocity fields...")
+    print("\nLoading center velocities...")
     v_obs_full = np.zeros((n_fields, 3))
     with h5py.File(filepath, "r") as f:
-        for i in trange(n_fields, desc="Extracting full field velocities"):
-            v_field = f[f"field_{i}/velocity"][:]
-            resolution = f[f"field_{i}"].attrs["resolution"]
-            center_idx = resolution // 2
-            v_obs_full[i] = v_field[:, center_idx, center_idx, center_idx]
+        for i in trange(n_fields, desc="Loading center velocities"):
+            v_obs_full[i] = f[f"field_{i}/velocity_center"][:]
 
     print(f"Extracted full field velocities: shape {v_obs_full.shape}")
 
