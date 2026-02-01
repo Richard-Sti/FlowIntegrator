@@ -772,6 +772,15 @@ def plot_ga_sky_map_from_grid(rho, box_size, observer, outfile,
             m, title="", unit=unit, cbar=True, xsize=1500, format="%.1f"
         )
 
+        # Draw coordinate grid and labels
+        hp.graticule(dpar=45, dmer=60, color='white', lw=0.2, ls='--')
+        for ell in range(0, 360, 60):
+            hp.projtext(ell + 10, -4, fr"${ell}^\circ$", lonlat=True,
+                        fontsize=7, ha='left', color='white')
+        for b in [-45, 45]:
+            hp.projtext(0 - 5, b + 2, fr"${b}^\circ$", lonlat=True,
+                        fontsize=7, ha='left', color='white')
+
         # Plot zone of avoidance
         plot_zone_of_avoidance()
 
@@ -1077,6 +1086,15 @@ def main():
                     unit=r"Mean of GA depth $[h^{-1}\,\mathrm{Mpc}]$",
                     cbar=True, cmap="inferno", xsize=1500, format="%.1f")
 
+        # Draw coordinate grid and labels
+        hp.graticule(dpar=45, dmer=60, color='white', lw=0.2, ls='--')
+        for ell in range(0, 360, 60):
+            hp.projtext(ell + 10, -4, fr"${ell}^\circ$", lonlat=True,
+                        fontsize=7, ha='left', color='white')
+        for b in [-45, 45]:
+            hp.projtext(0 - 5, b + 2, fr"${b}^\circ$", lonlat=True,
+                        fontsize=7, ha='left', color='white')
+
         # Plot zone of avoidance
         plot_zone_of_avoidance()
 
@@ -1102,6 +1120,15 @@ def main():
         hp.mollview(ga_depth_std, title="",
                     unit=r"Std of GA depth $[h^{-1}\,\mathrm{Mpc}]$",
                     cbar=True, cmap="magma", xsize=1500, format="%.1f")
+
+        # Draw coordinate grid and labels
+        hp.graticule(dpar=45, dmer=60, color='white', lw=0.2, ls='--')
+        for ell in range(0, 360, 60):
+            hp.projtext(ell + 10, -4, fr"${ell}^\circ$", lonlat=True,
+                        fontsize=7, ha='left', color='white')
+        for b in [-45, 45]:
+            hp.projtext(0 - 5, b + 2, fr"${b}^\circ$", lonlat=True,
+                        fontsize=7, ha='left', color='white')
 
         plot_zone_of_avoidance()
         texts = annotate_ga_center_and_clusters(
